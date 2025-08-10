@@ -38,12 +38,6 @@ int main(int argc, char** argv)
     argc--;
     argv++;
     if (argc < 0) return -1; // Check for filename arg
-    char* fileSuffix = "_particle_positions.h5";
-
-    // ============== HDF5 setup ========================
-    const std::string FILE_NAME(strcat(argv[0], fileSuffix));
-    const std::string DATASET_PREFIX("frame_");
-    H5::H5File file(FILE_NAME, H5F_ACC_TRUNC);
 
     // ============= simulation params ==================
     const int maxNumSteps = 500;
@@ -58,7 +52,22 @@ int main(int argc, char** argv)
     
     const box bounds = {100, 0, 100, 0}; //xmax, xmin, ymax, ymin
 
+    // ============== HDF5 setup ========================
+    char* fileSuffix = "_particle_positions.h5";
+    const std::string FILE_NAME(strcat(argv[0], fileSuffix));
+    const std::string DATASET_PREFIX("frame_");
+    H5::H5File file = initialize_hdf5_file(FILE_NAME, bounds);
+
     // Simulation loop
+    for (int step = 0; step < maxNumSteps; step++) {
+        for (int i = 0; i <numParticles; i++) {
+            velocity[i*2 + 1] += gravity * timeStep; // vy += g * dt
+            position[i*2] += velocity[i*2] * timeStep; // x += vx * dt
+            position[i*2 + 1] += velocity[2*i + 1] * timeStep; // y += vy * dt
+            bounce_particle(i, position, velocity, bounds, elasticity, radius);
+        }
+        save_frame_to_hdf5(file, position, step, DATASET_PREFIX);
+    }
     
     return 0;
 }
