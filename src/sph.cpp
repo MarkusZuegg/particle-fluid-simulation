@@ -6,12 +6,10 @@
 #include <random>
 #include <fstream>
 #include <iostream>
+#include <filesystem>
 
 // #include <H5Cpp.h>
-
 using std::vector;
-
-// =========================== Const defs ======================================
 
 // =========================== Structs =========================================
 // Bounding box for simulation
@@ -54,31 +52,28 @@ int main(int argc, char** argv)
     const int maxNumSteps = 10;
     const float gravity = -9.81;
     const float elasticity = 0.95;
-    const int numParticles = 1;
+    const int numParticles = 10;
     const float radius = 1;
     const double timeStep = 1.0/60.0;
 
-    vector<double> position(numParticles * 2); // x,y interleaved * numParticles
-    vector<double> velocity(numParticles * 2); // vx,vy interleaved * numParticles
-    
     const box bounds = {100, 0, 100, 0}; //xmax, xmin, ymax, ymin
 
-    // ============== HDF5 setup ========================
-    // char fileSuffix[] = "_particle_positions.h5";
-    // char* jobID = strdup(argv[0]);
+    vector<double> position(numParticles * 2); // x,y interleaved * numParticles
+    vector<double> velocity(numParticles * 2); // vx,vy interleaved * numParticles
+    init_random_particle_pos(position, velocity, numParticles, bounds, radius); // random starting pos
     
     // Open file for saving positions
-    std::string fileName = std::string(argv[0]) + ".csv";
+    std::string fileName = "logs/x" + std::string(argv[0]) + ".csv";
     std::ofstream csvFile = open_csv_file(fileName, numParticles, bounds);
+
     // Set the amount of digits saved from double
     csvFile << std::fixed << std::setprecision(5);
 
     // Simulation loop
-    init_particle_positions(position);
     for (int step = 0; step < maxNumSteps; step++) {
         for (int i = 0; i <numParticles; i++) {
             update_particle_position(i, position, velocity, timeStep, gravity);
-            // bounce_particle(i, position, velocity, bounds, elasticity, radius);
+            bounce_particle(i, position, velocity, bounds, elasticity, radius);
         }
 
         write_particle_positions_to_csv(csvFile, position);

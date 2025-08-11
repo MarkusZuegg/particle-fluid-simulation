@@ -1,6 +1,6 @@
 CC = g++
 
-CFLAGS = -Wall -pedantic -Wextra -I"${HDF5_INSTALL_PATH}/include"
+CFLAGS = -Wall -pedantic -Wextra -std=c++17 -I"${HDF5_INSTALL_PATH}/include"
 
 LDFLAGS = -L"${HDF5_INSTALL_PATH}/lib" -lhdf5_cpp -lm
 
