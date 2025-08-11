@@ -7,7 +7,7 @@
 #include <fstream>
 #include <iostream>
 
-#include <H5Cpp.h>
+// #include <H5Cpp.h>
 
 using std::vector;
 
@@ -32,13 +32,15 @@ void bounce_particle(int i, vector<double> &position, vector<double> &velocity,
 void init_particle_positions(vector<double> pos);
 void update_particle_position(int i, vector<double> &position, vector<double> &velocity,
         float timeStep, float gravity);
+void init_random_particle_pos(vector<double> &position, vector<double> &velocity,
+        int numParticles, const box &bounds, float radius);
 
 std::ofstream open_csv_file(const std::string& filename, int numParticles, const box& bounds);
 void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& positions);
 
-H5::H5File initialize_hdf5_file(const std::string& filename, const box& bounds);
-void save_frame_to_hdf5(H5::H5File& file, const vector<double>& position, int frame_num,
-        const std::string& prefix);
+// H5::H5File initialize_hdf5_file(const std::string& filename, const box& bounds);
+// void save_frame_to_hdf5(H5::H5File& file, const vector<double>& position, int frame_num,
+//         const std::string& prefix);
 
 // ========================== Functions ========================================
 
@@ -49,12 +51,12 @@ int main(int argc, char** argv)
     if (argc < 1) return -1; // Check for filename arg
 
     // ============= simulation params ==================
-    const int maxNumSteps = 500;
+    const int maxNumSteps = 10;
     const float gravity = -9.81;
     const float elasticity = 0.95;
-    const int numParticles = 5;
+    const int numParticles = 1;
     const float radius = 1;
-    const double timeStep = 1/60;
+    const double timeStep = 1.0/60.0;
 
     vector<double> position(numParticles * 2); // x,y interleaved * numParticles
     vector<double> velocity(numParticles * 2); // vx,vy interleaved * numParticles
@@ -65,8 +67,11 @@ int main(int argc, char** argv)
     // char fileSuffix[] = "_particle_positions.h5";
     // char* jobID = strdup(argv[0]);
     
+    // Open file for saving positions
     std::string fileName = std::string(argv[0]) + ".csv";
     std::ofstream csvFile = open_csv_file(fileName, numParticles, bounds);
+    // Set the amount of digits saved from double
+    csvFile << std::fixed << std::setprecision(5);
 
     // Simulation loop
     for (int step = 0; step < maxNumSteps; step++) {
@@ -125,9 +130,29 @@ void update_particle_position(int i, vector<double> &position, vector<double> &v
     position[y] += velocity[y] * timeStep; // y += vy * dt
 }
 
+void init_random_particle_pos(vector<double> &position, vector<double> &velocity,
+        int numParticles, const box &bounds, float radius)
+{
+    std::random_device rd;
+    std::mt19937 gen(rd());
+
+    std::uniform_real_distribution<double> pos_x(bounds.xmin + radius, bounds.xmax - radius);
+    std::uniform_real_distribution<double> pos_y(bounds.ymin + radius, bounds.ymax - radius);
+
+    for (int i = 0; i < numParticles; i++) {
+        int x = 2*i;
+        int y = 2*i + 1;
+        
+        position[x] = pos_x(gen);
+        position[y] = pos_y(gen);
+
+        velocity[x] = 0.0;
+        velocity[y] = 0.0;
+    }
+}
+
 //=========================== csv saving =======================================
 
-// 
 std::ofstream open_csv_file(const std::string& filename, int numParticles, const box& bounds)
 {
     std::ofstream file(filename);
@@ -140,6 +165,7 @@ std::ofstream open_csv_file(const std::string& filename, int numParticles, const
         return file;
     } else {
         std::cerr << "Unable to open file: " << filename << std::endl;
+        return file;
     }
 }
 
@@ -157,26 +183,26 @@ void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& 
 
 //========================== hdf5 stuff ========================================
 
-H5::H5File initialize_hdf5_file(const std::string& filename, const box& bounds)
-{
-    H5::H5File file(filename, H5F_ACC_TRUNC);
-    double bounds_data[4] = {bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax};
+// H5::H5File initialize_hdf5_file(const std::string& filename, const box& bounds)
+// {
+//     H5::H5File file(filename, H5F_ACC_TRUNC);
+//     double bounds_data[4] = {bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax};
 
-    hsize_t dims[1] = {4};
-    H5::DataSpace attr_dataspace(1, dims);
+//     hsize_t dims[1] = {4};
+//     H5::DataSpace attr_dataspace(1, dims);
 
-    H5::Attribute attribute = file.createAttribute("bounds", H5::PredType::NATIVE_DOUBLE, attr_dataspace);
-    attribute.write(H5::PredType::NATIVE_DOUBLE, bounds_data);
+//     H5::Attribute attribute = file.createAttribute("bounds", H5::PredType::NATIVE_DOUBLE, attr_dataspace);
+//     attribute.write(H5::PredType::NATIVE_DOUBLE, bounds_data);
 
-    std::cout << "HDF5 file created and bounds attribute written." << std::endl;
-    return file;
-}
+//     std::cout << "HDF5 file created and bounds attribute written." << std::endl;
+//     return file;
+// }
 
-void save_frame_to_hdf5(H5::H5File& file, const vector<double>& position, int frame_num, const std::string& prefix)
-{
-    hsize_t dims[1] = {position.size()};
-    H5::DataSpace dataspace(1, dims);
-    std::string dataset_name = prefix + std::to_string(frame_num);
-    H5::DataSet dataset = file.createDataSet(dataset_name, H5::PredType::NATIVE_DOUBLE, dataspace);
-    dataset.write(position.data(), H5::PredType::NATIVE_DOUBLE);
-}
+// void save_frame_to_hdf5(H5::H5File& file, const vector<double>& position, int frame_num, const std::string& prefix)
+// {
+//     hsize_t dims[1] = {position.size()};
+//     H5::DataSpace dataspace(1, dims);
+//     std::string dataset_name = prefix + std::to_string(frame_num);
+//     H5::DataSet dataset = file.createDataSet(dataset_name, H5::PredType::NATIVE_DOUBLE, dataspace);
+//     dataset.write(position.data(), H5::PredType::NATIVE_DOUBLE);
+// }
