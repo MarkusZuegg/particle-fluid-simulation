@@ -1,6 +1,6 @@
 CC = g++
 
-CFLAGS = -Wall -pedantic -Wextra -std=c++17 -I"${HDF5_INSTALL_PATH}/include"
+CFLAGS = -Wall -pedantic -Wextra -std=c++17
 
 LDFLAGS = -L"${HDF5_INSTALL_PATH}/lib" -lhdf5_cpp -lm
 
@@ -16,7 +16,7 @@ debug: clean $(TARGET)
 all: sph
 
 sph: sph.cpp
-	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) $^ -o $@
 
 clean:
 	rm -f sph *.o

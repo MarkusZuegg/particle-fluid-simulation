@@ -8,7 +8,6 @@
 #include <iostream>
 #include <filesystem>
 
-// #include <H5Cpp.h>
 using std::vector;
 
 // =========================== Structs =========================================
@@ -29,9 +28,10 @@ void bounce_particle(int i, vector<double> &position, vector<double> &velocity,
         const box &bounds, float elasticity, float radius);
 void init_particle_positions(vector<double> pos);
 void update_particle_position(int i, vector<double> &position, vector<double> &velocity,
-        float timeStep, float gravity);
+        float timeStep);
 void init_random_particle_pos(vector<double> &position, vector<double> &velocity,
         int numParticles, const box &bounds, float radius);
+void apply_gravity(int i, vector<double> &velocity, float timeStep, float gravity);
 
 std::ofstream open_csv_file(const std::string& filename, int numParticles, const box& bounds,
         float radius);
@@ -50,8 +50,8 @@ int main(int argc, char** argv)
     if (argc < 1) return -1; // Check for filename arg
 
     // ============= simulation params ==================
-    const int maxNumSteps = 10;
-    const int saveFrames = 1; // How many frames to save. != 0
+    const int maxNumSteps = 500;
+    const int saveFrames = 10; // How many frames to save. != 0
     const float gravity = -9.81;
     const float elasticity = 0.95;
     const int numParticles = 10;
@@ -74,7 +74,8 @@ int main(int argc, char** argv)
     // Simulation loop
     for (int step = 0; step < maxNumSteps; step++) {
         for (int i = 0; i <numParticles; i++) {
-            update_particle_position(i, position, velocity, timeStep, gravity);
+            apply_gravity(i, velocity, timeStep, gravity);
+            update_particle_position(i, position, velocity, timeStep);
             bounce_particle(i, position, velocity, bounds, elasticity, radius);
         }
 
@@ -120,14 +121,22 @@ void bounce_particle(int i, vector<double> &position, vector<double> &velocity,
     }
 }
 
-void update_particle_position(int i, vector<double> &position, vector<double> &velocity,
-        float timeStep, float gravity)
+void apply_gravity(int i, vector<double> &velocity, float timeStep, float gravity)
 {
     // Get particle index for x and y
     int x = 2 * i;
     int y = 2 * i + 1;
 
     velocity[y] += gravity * timeStep; // vy += g * dt
+}
+
+void update_particle_position(int i, vector<double> &position, vector<double> &velocity,
+        float timeStep)
+{
+    // Get particle index for x and y
+    int x = 2 * i;
+    int y = 2 * i + 1;
+
     position[x] += velocity[x] * timeStep; // x += vx * dt
     position[y] += velocity[y] * timeStep; // y += vy * dt
 }
@@ -184,29 +193,3 @@ void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& 
         std::cerr << "Unable to open file" << std::endl;
     }
 }
-
-//========================== hdf5 stuff ========================================
-
-// H5::H5File initialize_hdf5_file(const std::string& filename, const box& bounds)
-// {
-//     H5::H5File file(filename, H5F_ACC_TRUNC);
-//     double bounds_data[4] = {bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax};
-
-//     hsize_t dims[1] = {4};
-//     H5::DataSpace attr_dataspace(1, dims);
-
-//     H5::Attribute attribute = file.createAttribute("bounds", H5::PredType::NATIVE_DOUBLE, attr_dataspace);
-//     attribute.write(H5::PredType::NATIVE_DOUBLE, bounds_data);
-
-//     std::cout << "HDF5 file created and bounds attribute written." << std::endl;
-//     return file;
-// }
-
-// void save_frame_to_hdf5(H5::H5File& file, const vector<double>& position, int frame_num, const std::string& prefix)
-// {
-//     hsize_t dims[1] = {position.size()};
-//     H5::DataSpace dataspace(1, dims);
-//     std::string dataset_name = prefix + std::to_string(frame_num);
-//     H5::DataSet dataset = file.createDataSet(dataset_name, H5::PredType::NATIVE_DOUBLE, dataspace);
-//     dataset.write(position.data(), H5::PredType::NATIVE_DOUBLE);
-// }
