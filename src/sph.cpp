@@ -33,7 +33,8 @@ void update_particle_position(int i, vector<double> &position, vector<double> &v
 void init_random_particle_pos(vector<double> &position, vector<double> &velocity,
         int numParticles, const box &bounds, float radius);
 
-std::ofstream open_csv_file(const std::string& filename, int numParticles, const box& bounds);
+std::ofstream open_csv_file(const std::string& filename, int numParticles, const box& bounds,
+        float radius);
 void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& positions);
 
 // H5::H5File initialize_hdf5_file(const std::string& filename, const box& bounds);
@@ -50,6 +51,7 @@ int main(int argc, char** argv)
 
     // ============= simulation params ==================
     const int maxNumSteps = 10;
+    const int saveFrames = 1; // How many frames to save. != 0
     const float gravity = -9.81;
     const float elasticity = 0.95;
     const int numParticles = 10;
@@ -64,7 +66,7 @@ int main(int argc, char** argv)
     
     // Open file for saving positions
     std::string fileName = "logs/x" + std::string(argv[0]) + ".csv";
-    std::ofstream csvFile = open_csv_file(fileName, numParticles, bounds);
+    std::ofstream csvFile = open_csv_file(fileName, numParticles, bounds, radius);
 
     // Set the amount of digits saved from double
     csvFile << std::fixed << std::setprecision(5);
@@ -76,7 +78,10 @@ int main(int argc, char** argv)
             bounce_particle(i, position, velocity, bounds, elasticity, radius);
         }
 
-        write_particle_positions_to_csv(csvFile, position);
+        // Save every saveFrames
+        if (step % saveFrames == 0) {
+            write_particle_positions_to_csv(csvFile, position);
+        }
     }
     
     csvFile.close();
@@ -150,11 +155,13 @@ void init_random_particle_pos(vector<double> &position, vector<double> &velocity
 
 //=========================== csv saving =======================================
 
-std::ofstream open_csv_file(const std::string& filename, int numParticles, const box& bounds)
+std::ofstream open_csv_file(const std::string& filename, int numParticles, const box& bounds,
+        float radius)
 {
     std::ofstream file(filename);
     if (file.is_open()) {
         file << numParticles << "\n";
+        file << radius << "\n";
         file << bounds.xmin << "\n";
         file << bounds.xmax << "\n";
         file << bounds.ymin << "\n";
