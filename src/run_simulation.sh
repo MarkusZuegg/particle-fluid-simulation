@@ -6,4 +6,4 @@
 #SBATCH --output=x%j.out
 #SBATCH --error=x%j.err
 
-time ./sph $SLURM_JOB_ID
+srun ./sph $SLURM_JOB_ID
