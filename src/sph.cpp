@@ -74,16 +74,18 @@ int main(int argc, char** argv)
     csvFile << std::fixed << std::setprecision(5);
 
     // Simulation loop
+    init_particle_positions(position);
     for (int step = 0; step < maxNumSteps; step++) {
         for (int i = 0; i <numParticles; i++) {
             update_particle_position(i, position, velocity, timeStep, gravity);
-            bounce_particle(i, position, velocity, bounds, elasticity, radius);
+            // bounce_particle(i, position, velocity, bounds, elasticity, radius);
         }
 
         write_particle_positions_to_csv(csvFile, position);
     }
     
     csvFile.close();
+    std::cout << "End of simulation" << std::endl;
     return 0;
 }
 
