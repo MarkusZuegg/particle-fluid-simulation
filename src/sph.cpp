@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <filesystem>
+#include <algorithm>
 
 using std::vector;
 
@@ -33,13 +34,10 @@ void init_random_particle_pos(vector<double> &position, vector<double> &velocity
         int numParticles, const box &bounds, float radius);
 void apply_gravity(int i, vector<double> &velocity, float timeStep, float gravity);
 
-std::ofstream open_csv_file(const std::string& filename, int numParticles, const box& bounds,
-        float radius);
-void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& positions);
-
-// H5::H5File initialize_hdf5_file(const std::string& filename, const box& bounds);
-// void save_frame_to_hdf5(H5::H5File& file, const vector<double>& position, int frame_num,
-//         const std::string& prefix);
+std::ofstream open_csv_file(const std::string& filename, int numParticles);
+void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& positions, const int step);
+void save_to_json(const std::string &filename, const int numParticles, const float radius,
+        const box &bounds);
 
 // ========================== Functions ========================================
 
@@ -49,7 +47,7 @@ int main(int argc, char** argv)
     argv++;
     if (argc < 1) return -1; // Check for filename arg
 
-    // ============= simulation params ==================
+    // ============= Simulation params ==================
     const int maxNumSteps = 500;
     const int saveFrames = 10; // How many frames to save. != 0
     const float gravity = -9.81;
@@ -60,18 +58,22 @@ int main(int argc, char** argv)
 
     const box bounds = {100, 0, 100, 0}; //xmax, xmin, ymax, ymin
 
+    // ===================== Vector arrays ================================
     vector<double> position(numParticles * 2); // x,y interleaved * numParticles
     vector<double> velocity(numParticles * 2); // vx,vy interleaved * numParticles
-    init_random_particle_pos(position, velocity, numParticles, bounds, radius); // random starting pos
     
-    // Open file for saving positions
-    std::string fileName = "logs/x" + std::string(argv[0]) + ".csv";
-    std::ofstream csvFile = open_csv_file(fileName, numParticles, bounds, radius);
+    // ========================= CSV saving ===============================
+    std::string fileNameCsv = "logs/x" + std::string(argv[0]) + ".csv";
+    std::string fileNameJson = "logs/x" + std::string(argv[0]) + ".json";
+    std::ofstream csvFile = open_csv_file(fileNameCsv, numParticles);
+    save_to_json(fileNameJson, numParticles, radius, bounds);
 
     // Set the amount of digits saved from double
-    csvFile << std::fixed << std::setprecision(5);
+    int sigfigs = 4;
+    csvFile << std::fixed << std::setprecision(sigfigs);
 
-    // Simulation loop
+    // ===================== Simulation loop ==================================
+    init_random_particle_pos(position, velocity, numParticles, bounds, radius); // random starting pos
     for (int step = 0; step < maxNumSteps; step++) {
         for (int i = 0; i <numParticles; i++) {
             apply_gravity(i, velocity, timeStep, gravity);
@@ -81,7 +83,7 @@ int main(int argc, char** argv)
 
         // Save every saveFrames
         if (step % saveFrames == 0) {
-            write_particle_positions_to_csv(csvFile, position);
+            write_particle_positions_to_csv(csvFile, position, step);
         }
     }
     
@@ -124,7 +126,7 @@ void bounce_particle(int i, vector<double> &position, vector<double> &velocity,
 void apply_gravity(int i, vector<double> &velocity, float timeStep, float gravity)
 {
     // Get particle index for x and y
-    int x = 2 * i;
+    // int x = 2 * i;
     int y = 2 * i + 1;
 
     velocity[y] += gravity * timeStep; // vy += g * dt
@@ -162,19 +164,26 @@ void init_random_particle_pos(vector<double> &position, vector<double> &velocity
     }
 }
 
+// Smoothing kernel for calculating density
+// Uses a simple x^3 kernel
+float SmoothingKernel(float radius, float dist)
+{
+    float zero = 0.0;
+    float value = std::max(zero, radius - dist);
+    return value * value * value;
+}
+
 //=========================== csv saving =======================================
 
-std::ofstream open_csv_file(const std::string& filename, int numParticles, const box& bounds,
-        float radius)
+std::ofstream open_csv_file(const std::string& filename, int numParticles)
 {
     std::ofstream file(filename);
     if (file.is_open()) {
-        file << numParticles << "\n";
-        file << radius << "\n";
-        file << bounds.xmin << "\n";
-        file << bounds.xmax << "\n";
-        file << bounds.ymin << "\n";
-        file << bounds.ymax << "\n";
+        file << "step,";
+        for (int i = 0; i < numParticles; i++) {
+            file << "x" << i << ",y" << i << ","; // adds x1,y1,x2,y2 etc
+        }
+        file << '\n';
         return file;
     } else {
         std::cerr << "Unable to open file: " << filename << std::endl;
@@ -182,14 +191,36 @@ std::ofstream open_csv_file(const std::string& filename, int numParticles, const
     }
 }
 
-void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& positions)
+void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& positions, const int step)
 {
     if (file.is_open()) {
+        file << step << ',';
         for (size_t i = 0; i < positions.size(); ++i) {
             file << positions[i] << (i == positions.size() - 1 ? "" : ",");
         }
         file << "\n";
     } else {
         std::cerr << "Unable to open file" << std::endl;
+    }
+}
+
+// ====================== Json ===================================
+
+void save_to_json(const std::string &filename, const int numParticles, const float radius,
+        const box &bounds)
+{
+    std::ofstream file(filename);
+    if (file.is_open()) {
+        file << "{\n";
+        file << "\"numParticles\":" << numParticles << ",\n";
+        file << "\"radius\":" << radius << ",\n";
+        file << "\"xmax\":" << bounds.xmax << ",\n";
+        file << "\"xmin\":" << bounds.xmin << ",\n";
+        file << "\"ymax\":" << bounds.ymax << ",\n";
+        file << "\"ymin\":" << bounds.ymin << ",\n";
+        file << "}\n";
+        file.close();
+    } else {
+        std::cerr << "Cant save to json file" << std::endl;
     }
 }

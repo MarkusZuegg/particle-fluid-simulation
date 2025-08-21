@@ -1,4 +1,5 @@
 /.vscode
 COSC3500_Milestone.pdf
 src/sph
-logs/
+src/logs/
+bin/
