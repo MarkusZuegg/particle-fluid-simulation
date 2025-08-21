@@ -8,7 +8,7 @@ CC = gcc
 CXX = g++
 CFLAGS = -std=c11
 LIBCFLAGS = -std=c11
-CXXFLAGS = -Wall -pedantic -Wextra -std=c++17
+CXXFLAGS = -Wall -pedantic -Wextra -std=c++17 -I$(LIBDIR) -L$(LIBDIR)
 DEBUG = -g
 
 # Target

@@ -8,6 +8,9 @@
 #include <iostream>
 #include <filesystem>
 #include <algorithm>
+#include "cJSON.h"
+#include "gsd.h"
+
 
 using std::vector;
 

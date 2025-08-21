@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import csv
 import sys
+import pandas as pd
 
 def visualize_particles(csv_filepath):
     """
