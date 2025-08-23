@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import sys
+import numpy as np
 
 def animate_simulation(csv_file, json_file):
     # ==================== Load metadata ====================
@@ -37,7 +38,7 @@ def animate_simulation(csv_file, json_file):
 
     # ==================== Animation function ====================
     def init():
-        scat.set_offsets([])
+        scat.set_offsets(np.empty((0, 2)))
         title.set_text("Step 0")
         return scat, title
 
