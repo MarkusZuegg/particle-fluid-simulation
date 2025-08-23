@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=2D-sph-simulation
+#SBATCH --job-name=SPH
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
