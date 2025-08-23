@@ -32,7 +32,7 @@ def animate_simulation(csv_file, json_file):
     ax.set_ylim(ymin, ymax)
     ax.set_aspect("equal")
 
-    scat = ax.scatter([], [], s=(radius * 20)**2, c="blue")  # marker size scaled
+    scat = ax.scatter([], [], s=radius, c="blue")
 
     title = ax.set_title("Step 0")
 
