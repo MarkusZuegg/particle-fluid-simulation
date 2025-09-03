@@ -10,6 +10,7 @@
 #include <algorithm>
 #include "cJSON.h"
 #include "gsd.h"
+#include <math.h>
 
 
 using std::vector;
@@ -54,6 +55,8 @@ int get_x_index(int i);
 int get_y_index(int i);
 int get_z_index(int i);
 
+float smoothing_kernel(float dist, float radius);
+
 // ========================== Functions ========================================
 
 int main(int argc, char** argv)
@@ -68,8 +71,10 @@ int main(int argc, char** argv)
     const float gravity = -9.81;
     const float elasticity = 0.95;
     const int numParticles = 10;
-    const float radius = 1;
+    const float radius = 1; // For smoothing function
     const double timeStep = 1.0/60.0;
+    const int mass = 1; // Particle mass
+
 
     const box bounds = {100, 0, 100, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
 
@@ -195,27 +200,38 @@ void init_random_particle_pos(vector<double> &position, vector<double> &velocity
 }
 
 // Smoothing kernel for calculating density
-// Uses a simple x^3 kernel
-float SmoothingKernel(float radius, float dist)
+// Uses a simple (r-x)^3 kernel
+float smoothing_kernel(float dist, float radius)
 {
-    float zero = 0.0;
-    float value = std::max(zero, radius - dist);
-    return value * value * value;
+    if (dist >= radius) return 0;
+
+    float volume = (M_PI * pow(radius, 4) / 6);
+    float influence = radius - dist;
+    return influence / volume;
 }
 
-// For arrays
+float smooth_kernal_derivative(float dist, float radius)
+{
+    if (dist >= radius) return 0;
+
+    float scale = 12 / (pow(radius, 4) * M_PI);
+    float influence = dist - radius;
+    return influence * scale;
+}
+
+// For vectors
 int get_x_index(int i)
 {
     return i * numDimensions;
 }
 
-// For arrays
+// For vectors
 int get_y_index(int i)
 {
     return i * numDimensions + 1;
 }
 
-// For arrays
+// For vectors
 int get_z_index(int i)
 {
     return 0;
