@@ -85,10 +85,11 @@ int main(int argc, char** argv)
     const float elasticity = 0.95;
     
     const int mass = 1; // Particle mass
-    const float radius = 1; // For smoothing function
+    const float radius = 1; // for particles
 
+    const float smoothingRadius = 2.5;
     const float targetDensity = 3;
-    const float pressureMulti = 1;
+    const float pressureMulti = 2;
 
 
     const box bounds = {10, 0, 10, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
@@ -126,7 +127,7 @@ int main(int argc, char** argv)
         for (int i = 0; i < numParticles; i++) {
             // Apply gravity and calc denisties for all particles
             apply_gravity(i, velocity, timeStep, gravity);
-            calculate_denisty(i, densities, position, mass, numParticles, radius);
+            calculate_denisty(i, densities, position, mass, numParticles, smoothingRadius);
             
         }
 
@@ -135,7 +136,7 @@ int main(int argc, char** argv)
             double forceX = 0.0f;
             double forceY = 0.0f;
             calculate_pressure(i, forceX, forceY, position, densities,
-                    numParticles, mass, radius, targetDensity, pressureMulti);
+                    numParticles, mass, smoothingRadius, targetDensity, pressureMulti);
             // a = f / density
             double accelX = forceX / densities[i];
             double accelY = forceY / densities[i];
@@ -302,13 +303,15 @@ void calculate_pressure(int i, double &force_x, double &force_y, vector<double> 
     double x1 = postion[get_x_index(i)];
     double y1 = postion[get_y_index(i)];
 
+    double density1 = densities[i];
+    if (density1 <= 0.0f) return;
 
     // Loop through all the other particles
     for (int j = 0; j < numParticles; j++) {
         
         // get other particle postion
-        double x2 = postion[get_x_index(i)];
-        double y2 = postion[get_y_index(i)];
+        double x2 = postion[get_x_index(j)];
+        double y2 = postion[get_y_index(j)];
 
         float dist = distance_from_two_points(x1, y1, x2, y2);
         if (dist == 0) continue; // Either particle is same, or ontop of eachother
@@ -321,7 +324,6 @@ void calculate_pressure(int i, double &force_x, double &force_y, vector<double> 
 
         float slope = smooth_kernal_derivative(dist, radius); // Grab the gradient of pressure change
 
-        double density1 = densities[i];
         double density2 = densities[j];
         float sharredPressure = -shared_pressure(density1, density2, targetDensity, pressureMulti); // - maybe not needed
 
