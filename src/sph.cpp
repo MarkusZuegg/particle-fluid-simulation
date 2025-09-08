@@ -81,13 +81,13 @@ int main(int argc, char** argv)
     const int numParticles = 40;
     const double timeStep = 1.0/60.0;
     
-    const float gravity = -9.81;
+    const float gravity = 0;
     const float elasticity = 0.85;
     
     const int mass = 1; // Particle mass
     const float radius = 1; // for particles
 
-    const float smoothingRadius = 1;
+    const float smoothingRadius = 2.5;
     const float targetDensity = 3;
     const float pressureMulti = 0.1;
 
@@ -239,39 +239,19 @@ void init_random_particle_pos(vector<double> &position, vector<double> &velocity
 
 // =================== Kernals ====================
 
-// Smoothing kernel for calculating density
-// Uses a simple (r-x)^3 kernel
-float smoothing_kernel(float dist, float radius)
-{
-    if (dist >= radius) return 0;
-
-    float volume = (M_PI * pow(radius, 4) / 6.0f);
-    float influence = (radius - dist) * (radius - dist);
-    return influence / volume;
-}
-
-float smooth_kernal_derivative(float dist, float radius)
-{
-    if (dist >= radius) return 0;
-
-    float scale = -12.0f / (pow(radius, 4) * M_PI);
-    float point = dist - radius;
-    return point * scale;
-}
-
 float ploy6_kernal(float dist, float radius)
 {
     if (dist >= radius) return 0;
     float radius2 = radius * radius;
     float distance2 = dist * dist;
     float influence = radius2 - distance2;
-    float norm = 4.0f / (M_PI / pow(radius, 8));
+    float norm = 4.0f / (M_PI * pow(radius, 8));
     return norm * (influence * influence * influence);
 }
 
 float spikey_kernal(float dist, float radius)
 {
-    if ( dist >= radius) return 0;
+    if (dist >= radius) return 0;
     float norm = 10.0f / (M_PI * pow(radius, 5));
     float influenece = radius - dist;
     return norm * (influenece * influenece * influenece);
@@ -282,7 +262,7 @@ float spikey_kernal_derivative(float dist, float radius)
     if (dist >= radius || dist <= 0) return 0;
     float norm = 10.0f / (M_PI * pow(radius, 5));
     float influence = radius - dist;
-    return -3.0f * norm * (influence * influence);
+    return 3.0f * norm * (influence * influence);
 }
 
 // Calculate the density for particle at index i.
@@ -325,6 +305,7 @@ void calculate_pressure(int i, double &force_x, double &force_y, vector<double> 
     double y1 = postion[get_y_index(i)];
 
     double density1 = densities[i];
+    float pressure1 = density_to_pressure(density1, targetDensity, pressureMulti);
     if (density1 <= 0.0f) return;
 
     // Loop through all the other particles
@@ -339,20 +320,19 @@ void calculate_pressure(int i, double &force_x, double &force_y, vector<double> 
         if (dist == 0) continue; // Either particle is same, or ontop of eachother
 
         // get unit vectors
-        // dx / mag
-        // dy / mag
         double dirX = (x1 - x2) / dist;
         double dirY = (y1 - y2) / dist;
 
         float slope = spikey_kernal_derivative(dist, radius); // Grab the gradient of pressure change
-
         double density2 = densities[j];
-        float sharredPressure = -shared_pressure(density1, density2, targetDensity, pressureMulti); // - maybe not needed
+        float pressure2 = density_to_pressure(density2, targetDensity, pressureMulti);
 
-        float contribution = sharredPressure * slope * (mass / density2);
+        float gradX = dirX * slope;
+        float gradY = dirY * slope;
+        float coeff = -mass * (pressure1 / (density1 * density1) + pressure2 / (density2 * density2));
 
-        force_x += contribution * dirX;
-        force_y += contribution * dirY;
+        force_x += coeff * gradX;
+        force_y += coeff * gradY;
     }
 }
 
@@ -394,7 +374,7 @@ float distance_from_two_points(double x1, double y1, double x2, double y2)
     double square_diff_x = (x2 - x1) * (x2 - x1);
     double square_diff_y = (y2 - y1) * (y2 - y1);
     double sum = square_diff_x + square_diff_y;
-    float value = sqrt(sum);
+    float value = sqrt(sum); //TODO make this quicker
     return value;
 }
 
