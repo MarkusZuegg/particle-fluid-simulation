@@ -50,6 +50,13 @@ void calculate_pressure(int i, double &force_x, double &force_y, vector<double> 
                         float targetDensity, float pressureMulti);
 void build_grid_linkedlist(vector<double> &position, vector<int> &head, vector<int> &next,
         int numParticles, float cellSize, const box &bounds, int &gridRows, int &gridCols);
+void calculate_denisty_grid(int i, vector<double> &densities, vector<double> &position,
+        float mass, float radius, vector<int> &head, vector<int> &next,
+        int gridRows, int gridCols, float cellSize, const box &bounds);
+void calculate_pressure_grid(int i, double &force_x, double &force_y, vector<double> &postion,
+        vector<double> &densities, int mass, float radius,
+        float targetDensity, float pressureMulti, vector<int> &head, vector<int> &next,
+        int gridRows, int gridCols, float cellSize, const box &bounds);
 
 int get_x_index(int i);
 int get_y_index(int i);
@@ -85,7 +92,7 @@ int main(int argc, char** argv)
     // ============= Simulation params ==================
     const int maxNumSteps = 1500;
     const int saveFrames = 1; // How many frames to save. != 0
-    const int numParticles = 400;
+    const int numParticles = 1000;
     const double timeStep = 1.0/60.0;
 
     const float gravity = 0;
@@ -96,10 +103,15 @@ int main(int argc, char** argv)
 
     const float smoothingRadius = 1.5;
     const float targetDensity = 1.5;
-    const float pressureMulti = 1.5;
+    const float pressureMulti = 1;
 
+    const box bounds = {15, 0, 15, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
 
-    const box bounds = {10, 0, 10, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
+    float cellSize = smoothingRadius;
+    int gridRows = 0;
+    int gridCols = 0;
+    vector<int> head;
+    vector<int> next;
 
     // ===================== Vector arrays ================================
     vector<double> position(numParticles * numDimensions); // x,y,z interleaved * numParticles
@@ -137,20 +149,33 @@ int main(int argc, char** argv)
         auto start = std::chrono::high_resolution_clock::now();
     
         for (int i = 0; i < numParticles; i++) {
-            // Apply gravity and calc denisties for all particles
-            // TODO make it use predictive positions
+            // Apply gravity and look one step in the future
             apply_gravity(i, velocity, timeStep, gravity);
             predicted_positions(i, position, velocity, predictedPos, timeStep);
-            calculate_denisty(i, densities, predictedPos, mass, numParticles, smoothingRadius);
-            
+        }
+
+        // Create the linklist struct for grids/ cells
+        build_grid_linkedlist(predictedPos, head, next, numParticles, cellSize, bounds,
+                gridRows, gridCols);
+
+        for (int i = 0; i < numParticles; i++) {
+            // Calc density
+            // calculate_denisty(i, densities, predictedPos, mass, numParticles, smoothingRadius);
+            calculate_denisty_grid(i, densities, predictedPos, mass, smoothingRadius, head,
+                    next, gridRows, gridCols, cellSize, bounds);
         }
 
         for (int i = 0; i < numParticles; i++) {
             // Calc pressure
-            double forceX = 0.0f;
-            double forceY = 0.0f;
-            calculate_pressure(i, forceX, forceY, predictedPos, densities,
-                    numParticles, mass, smoothingRadius, targetDensity, pressureMulti);
+            double forceX = 0.0;
+            double forceY = 0.0;
+
+            // calculate_pressure(i, forceX, forceY, predictedPos, densities,
+            //         numParticles, mass, smoothingRadius, targetDensity, pressureMulti);
+            calculate_pressure_grid(i, forceX, forceY, predictedPos, densities, mass,
+                    smoothingRadius, targetDensity, pressureMulti, head, next, gridRows,
+                    gridCols, cellSize, bounds);
+
             // a = f / density
             double accelX = forceX / densities[i];
             double accelY = forceY / densities[i];
@@ -167,7 +192,7 @@ int main(int argc, char** argv)
 
         // Stop execution time (dont count file saving)
         auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start);
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         totalTime += duration;
 
         // Save every saveFrames
@@ -288,7 +313,7 @@ void calculate_pressure(int i, double &force_x, double &force_y, vector<double> 
     // Get density and pressure for 1st particle
     double density1 = densities[i];
     float pressure1 = density_to_pressure(density1, targetDensity, pressureMulti);
-    if (density1 <= 0.0f) return;
+    if (density1 <= 0.0) return;
 
     // Loop through all the other particles
     for (int j = 0; j < numParticles; j++) {
@@ -343,7 +368,7 @@ void build_grid_linkedlist(vector<double> &position, vector<int> &head, vector<i
     int numCells = gridRows * gridCols;
     // Reset head and next vector arrays
     head.assign(numCells, -1);
-    next.assign(numCells, -1);
+    next.assign(numParticles, -1);
 
     // Insert the particles
     for (int i = 0; i < numParticles; i++) {
@@ -363,7 +388,7 @@ void build_grid_linkedlist(vector<double> &position, vector<int> &head, vector<i
 }
 
 void calculate_denisty_grid(int i, vector<double> &densities, vector<double> &position,
-        float mass, int numParticles, float radius, vector<int> &head, vector<int> &next,
+        float mass, float radius, vector<int> &head, vector<int> &next,
         int gridRows, int gridCols, float cellSize, const box &bounds)
 {
     double density = 0;
@@ -378,7 +403,7 @@ void calculate_denisty_grid(int i, vector<double> &densities, vector<double> &po
     cellY = std::clamp(cellY, 0, gridRows - 1);
 
     // Go through a 3x3 of cells around the particle cell
-    for (int dy = -1; dy <+ 1; dy++) {
+    for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             int newCellX = cellX + dx;
             int newCellY = cellY + dy;
@@ -401,7 +426,7 @@ void calculate_denisty_grid(int i, vector<double> &densities, vector<double> &po
 }
 
 void calculate_pressure_grid(int i, double &force_x, double &force_y, vector<double> &postion,
-        vector<double> &densities, int numParticles, int mass, float radius,
+        vector<double> &densities, int mass, float radius,
         float targetDensity, float pressureMulti, vector<int> &head, vector<int> &next,
         int gridRows, int gridCols, float cellSize, const box &bounds)
 {
@@ -415,7 +440,7 @@ void calculate_pressure_grid(int i, double &force_x, double &force_y, vector<dou
     // Get density and pressure for 1st particle
     double density1 = densities[i];
     float pressure1 = density_to_pressure(density1, targetDensity, pressureMulti);
-    if (density1 <= 0.0f) return;
+    if (density1 <= 0.0) return;
 
     // Get first particle cell position
     int cellX = (int)floor((x1 - bounds.xmin) / cellSize);
@@ -424,7 +449,7 @@ void calculate_pressure_grid(int i, double &force_x, double &force_y, vector<dou
     cellY = std::clamp(cellY, 0, gridRows - 1);
 
     // Go through a 3x3 of cells around the particle cell
-    for (int dy = -1; dy <+ 1; dy++) {
+    for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             int newCellX = cellX + dx;
             int newCellY = cellY + dy;
@@ -432,6 +457,7 @@ void calculate_pressure_grid(int i, double &force_x, double &force_y, vector<dou
             if (newCellY < 0 || newCellY >= gridRows) continue; // check y
 
             int neighbourCell = newCellX + (newCellY * gridCols);
+            // Now loop through all particles in this cell
             for (int j = head[neighbourCell]; j != -1; j = next[j]) {
                 if (j == i) continue;
 
