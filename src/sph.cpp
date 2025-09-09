@@ -12,8 +12,9 @@
 #include "gsd.h"
 #include <math.h>
 
-
 using std::vector;
+using timer = std::chrono::high_resolution_clock;
+using mircoseconds = std::chrono::microseconds;
 
 // =================== Global Variables ========================================
 const int numDimensions = 2;
@@ -87,7 +88,7 @@ int main(int argc, char** argv)
     if (argc < 1) return -1; // Check for filename arg
 
     // Total time
-    std::chrono::microseconds totalTime;
+    mircoseconds totalTime{0};
 
     // ============= Simulation params ==================
     const int maxNumSteps = 1500;
@@ -146,7 +147,7 @@ int main(int argc, char** argv)
     init_random_particle_pos(position, velocity, numParticles, bounds, radius); // random starting pos
     for (int step = 0; step < maxNumSteps; step++) {
         // Time execution
-        auto start = std::chrono::high_resolution_clock::now();
+        auto start = timer::now();
     
         for (int i = 0; i < numParticles; i++) {
             // Apply gravity and look one step in the future
@@ -191,9 +192,7 @@ int main(int argc, char** argv)
         }
 
         // Stop execution time (dont count file saving)
-        auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        totalTime += duration;
+        totalTime += std::chrono::duration_cast<mircoseconds>(timer::now() - start);
 
         // Save every saveFrames
         if (step % saveFrames == 0) {
@@ -356,6 +355,7 @@ float density_to_pressure(double density, float targetDensity, float pressureMul
 }
 
 // ======================== Grid shenanigans ===================================
+// REF: https://web.archive.org/web/20140725014123/https://docs.nvidia.com/cuda/samples/5_Simulations/particles/doc/particles.pdf
 
 void build_grid_linkedlist(vector<double> &position, vector<int> &head, vector<int> &next,
         int numParticles, float cellSize, const box &bounds, int &gridRows, int &gridCols)
