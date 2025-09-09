@@ -39,33 +39,34 @@ void bounce_particle(int i, vector<double> &position, vector<double> &velocity,
 void init_particle_positions(vector<double> pos);
 void update_particle_position(int i, vector<double> &position, vector<double> &velocity,
         float timeStep);
-void init_random_particle_pos(vector<double> &position, vector<double> &velocity,
-        int numParticles, const box &bounds, float radius);
 void apply_gravity(int i, vector<double> &velocity, float timeStep, float gravity);
-
-std::ofstream open_csv_file(const std::string& filename, int numParticles);
-void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& positions, const int step);
-void save_to_json(const std::string &filename, const int numParticles, const float radius,
-        const box &bounds);
-
-void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles,
-        const box &bounds, const vector<double> &positions, const vector<double> &velocities);
-
 void calculate_denisty(int i, vector<double> &densities, vector<double> &position,
         float mass, int numParticles, float radius);
 float density_to_pressure(double density, float targetDensity, float pressureMulti);
 void calculate_pressure(int i, double &force_x, double &force_y, vector<double> &postion,
                         vector<double> &densities, int numParticles, int mass, float radius,
                         float targetDensity, float pressureMulti);
-float shared_pressure(float densityA, float desnityB, float targetDensity, float pressureMulti);
 
 int get_x_index(int i);
 int get_y_index(int i);
 int get_z_index(int i);
 float distance_from_two_points(double x1, double y1, double x2, double y2);
 
-float smoothing_kernel(float dist, float radius);
-float smooth_kernal_derivative(float dist, float radius);
+float ploy6_kernal(float dist, float radius);
+float spikey_kernal(float dist, float radius);
+float spikey_kernal_derivative(float dist, float radius);
+
+void init_random_particle_pos(vector<double> &position, vector<double> &velocity,
+        int numParticles, const box &bounds, float radius);
+void init_square_particle_pos(vector<double> &position, vector<double> &velocity,
+        int numParticles, const box &bounds, float spacing);
+
+std::ofstream open_csv_file(const std::string& filename, int numParticles);
+void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& positions, const int step);
+void save_to_json(const std::string &filename, const int numParticles, const float radius,
+        const box &bounds);
+void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles,
+        const box &bounds, const vector<double> &positions, const vector<double> &velocities);
 
 // ========================== Functions ========================================
 
@@ -78,26 +79,27 @@ int main(int argc, char** argv)
     // ============= Simulation params ==================
     const int maxNumSteps = 1500;
     const int saveFrames = 1; // How many frames to save. != 0
-    const int numParticles = 40;
+    const int numParticles = 400;
     const double timeStep = 1.0/60.0;
     
     const float gravity = 0;
     const float elasticity = 0.85;
     
     const int mass = 1; // Particle mass
-    const float radius = 1; // for particles
+    const float radius = 0.1; // for particles
 
-    const float smoothingRadius = 2.5;
-    const float targetDensity = 3;
-    const float pressureMulti = 0.1;
+    const float smoothingRadius = 1.2;
+    const float targetDensity = 1.5;
+    const float pressureMulti = 1;
 
 
-    const box bounds = {20, 0, 20, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
+    const box bounds = {10, 0, 10, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
 
     // ===================== Vector arrays ================================
     vector<double> position(numParticles * numDimensions); // x,y,z interleaved * numParticles
     vector<double> velocity(numParticles * numDimensions); // vx,vy,vz interleaved * numParticles
     vector<double> densities(numParticles); // Densities storing for all particles
+    vector<double> predictedPos(numParticles * numDimensions);
 
     // ========================== File Names ==============================
     std::string fileNameCsv = "logs/x" + std::string(argv[0]) + ".csv";
@@ -122,10 +124,12 @@ int main(int argc, char** argv)
     }
 
     // ===================== Simulation loop ==================================
+    float spacing = 2.0;
     init_random_particle_pos(position, velocity, numParticles, bounds, radius); // random starting pos
     for (int step = 0; step < maxNumSteps; step++) {
         for (int i = 0; i < numParticles; i++) {
             // Apply gravity and calc denisties for all particles
+            // TODO make it use predictive positions
             apply_gravity(i, velocity, timeStep, gravity);
             calculate_denisty(i, densities, position, mass, numParticles, smoothingRadius);
             
@@ -172,8 +176,8 @@ void bounce_particle(int i, vector<double> &position, vector<double> &velocity,
         const box &bounds, float elasticity, float radius)
 {
     // Get particle index for x and y
-    int x = 2 * i;
-    int y = 2 * i + 1;
+    int x = get_x_index(i);
+    int y = get_y_index(i);
 
     // check walls in x
     if (position[x] - radius < bounds.xmin) {
@@ -214,55 +218,16 @@ void update_particle_position(int i, vector<double> &position, vector<double> &v
     position[y] += velocity[y] * timeStep; // y += vy * dt
 }
 
-
-// Randomly generates positions for each particle
-void init_random_particle_pos(vector<double> &position, vector<double> &velocity,
-        int numParticles, const box &bounds, float radius)
+// Just goes forward by one time step and returns the position the particle would be at.
+// Stores this new positon in the predictedPos vector array
+void predicted_positions(int i, vector<double> &position, vector<double> &velocity,
+        vector<double> &predictedPos, float timeStep)
 {
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    int x = get_x_index(i);
+    int y = get_y_index(i);
 
-    std::uniform_real_distribution<double> pos_x(bounds.xmin + radius, bounds.xmax - radius);
-    std::uniform_real_distribution<double> pos_y(bounds.ymin + radius, bounds.ymax - radius);
-
-    for (int i = 0; i < numParticles; i++) {
-        int x = get_x_index(i);
-        int y = get_y_index(i);
-        
-        position[x] = pos_x(gen);
-        position[y] = pos_y(gen);
-
-        velocity[x] = 0.0;
-        velocity[y] = 0.0;
-    }
-}
-
-// =================== Kernals ====================
-
-float ploy6_kernal(float dist, float radius)
-{
-    if (dist >= radius) return 0;
-    float radius2 = radius * radius;
-    float distance2 = dist * dist;
-    float influence = radius2 - distance2;
-    float norm = 4.0f / (M_PI * pow(radius, 8));
-    return norm * (influence * influence * influence);
-}
-
-float spikey_kernal(float dist, float radius)
-{
-    if (dist >= radius) return 0;
-    float norm = 10.0f / (M_PI * pow(radius, 5));
-    float influenece = radius - dist;
-    return norm * (influenece * influenece * influenece);
-}
-
-float spikey_kernal_derivative(float dist, float radius)
-{
-    if (dist >= radius || dist <= 0) return 0;
-    float norm = 10.0f / (M_PI * pow(radius, 5));
-    float influence = radius - dist;
-    return 3.0f * norm * (influence * influence);
+    predictedPos[x] = position[x] + (velocity[x] * timeStep);
+    predictedPos[y] = position[y] + (velocity[y] * timeStep);
 }
 
 // Calculate the density for particle at index i.
@@ -278,7 +243,7 @@ void calculate_denisty(int i, vector<double> &densities, vector<double> &positio
     double density = 0;
 
     double x1 = position[get_x_index(i)];
-    double y1 = position[get_y_index(i)]; 
+    double y1 = position[get_y_index(i)];
 
 
     // loop through all particles
@@ -304,6 +269,7 @@ void calculate_pressure(int i, double &force_x, double &force_y, vector<double> 
     double x1 = postion[get_x_index(i)];
     double y1 = postion[get_y_index(i)];
 
+    // Get density and pressure for 1st particle
     double density1 = densities[i];
     float pressure1 = density_to_pressure(density1, targetDensity, pressureMulti);
     if (density1 <= 0.0f) return;
@@ -316,19 +282,23 @@ void calculate_pressure(int i, double &force_x, double &force_y, vector<double> 
         double x2 = postion[get_x_index(j)];
         double y2 = postion[get_y_index(j)];
 
+        // Get distance/ magnitiude
         float dist = distance_from_two_points(x1, y1, x2, y2);
         if (dist == 0) continue; // Either particle is same, or ontop of eachother
 
-        // get unit vectors
+        // Get unit vectors
         double dirX = (x1 - x2) / dist;
         double dirY = (y1 - y2) / dist;
 
+        // Get the slope of the kernal at the distance
         float slope = spikey_kernal_derivative(dist, radius); // Grab the gradient of pressure change
+        // Get density and pressure for 2nd particle
         double density2 = densities[j];
         float pressure2 = density_to_pressure(density2, targetDensity, pressureMulti);
 
         float gradX = dirX * slope;
         float gradY = dirY * slope;
+        // Symetric pressure calculation
         float coeff = -mass * (pressure1 / (density1 * density1) + pressure2 / (density2 * density2));
 
         force_x += coeff * gradX;
@@ -336,6 +306,7 @@ void calculate_pressure(int i, double &force_x, double &force_y, vector<double> 
     }
 }
 
+// Simple calculation of pressure, depending on the target density
 float density_to_pressure(double density, float targetDensity, float pressureMulti)
 {
     float densityError = density - targetDensity;
@@ -343,12 +314,35 @@ float density_to_pressure(double density, float targetDensity, float pressureMul
     return pressure;
 }
 
-// The average of the pressure from both particles
-float shared_pressure(float densityA, float desnityB, float targetDensity, float pressureMulti)
+// =================== Kernals ====================
+
+// (r^2-d^2)^3 kernal
+float ploy6_kernal(float dist, float radius)
 {
-    float pressureA = density_to_pressure(densityA, targetDensity, pressureMulti);
-    float pressureB = density_to_pressure(desnityB, targetDensity, pressureMulti);
-    return (pressureA + pressureB) / 2;
+    if (dist >= radius) return 0;
+    float radius2 = radius * radius;
+    float distance2 = dist * dist;
+    float influence = radius2 - distance2;
+    float norm = 4.0 / (M_PI * pow(radius, 8));
+    return norm * (influence * influence * influence);
+}
+
+// (r-d)^3 kernal
+float spikey_kernal(float dist, float radius)
+{
+    if (dist >= radius) return 0;
+    float norm = 10.0 / (M_PI * pow(radius, 5));
+    float influenece = radius - dist;
+    return norm * (influenece * influenece * influenece);
+}
+
+// -3(r-d)^2
+float spikey_kernal_derivative(float dist, float radius)
+{
+    if (dist >= radius || dist <= 0) return 0;
+    float norm = 10.0 / (M_PI * pow(radius, 5));
+    float influence = radius - dist;
+    return -3.0 * norm * (influence * influence);
 }
 
 // For vectors
@@ -363,12 +357,6 @@ int get_y_index(int i)
     return i * numDimensions + 1;
 }
 
-// For vectors
-int get_z_index(int i)
-{
-    return 0;
-}
-
 float distance_from_two_points(double x1, double y1, double x2, double y2)
 {
     double square_diff_x = (x2 - x1) * (x2 - x1);
@@ -377,6 +365,56 @@ float distance_from_two_points(double x1, double y1, double x2, double y2)
     float value = sqrt(sum); //TODO make this quicker
     return value;
 }
+
+// Randomly generates positions for each particle
+void init_random_particle_pos(vector<double> &position, vector<double> &velocity,
+        int numParticles, const box &bounds, float radius)
+{
+    std::random_device rd;
+    std::mt19937 gen(rd());
+
+    std::uniform_real_distribution<double> pos_x(bounds.xmin + radius, bounds.xmax - radius);
+    std::uniform_real_distribution<double> pos_y(bounds.ymin + radius, bounds.ymax - radius);
+
+    for (int i = 0; i < numParticles; i++) {
+        int x = get_x_index(i);
+        int y = get_y_index(i);
+        
+        position[x] = pos_x(gen);
+        position[y] = pos_y(gen);
+
+        velocity[x] = 0.0;
+        velocity[y] = 0.0;
+    }
+}
+
+void init_square_particle_pos(vector<double> &position, vector<double> &velocity,
+        int numParticles, const box &bounds, float spacing)
+{
+    float centerX = 0.5 * (bounds.xmax + bounds.xmin);
+    float centerY = 0.5 * (bounds.ymax + bounds.ymin);
+
+    int gridSize = static_cast<int>(ceil(sqrt(numParticles)));
+    float halfSpan = 0.5 * (gridSize - 1) * spacing;
+
+    int count = 0;
+    for (int row = 0; row < gridSize; row++) {
+        for (int col = 0; col < gridSize; col++) {
+            if (count >= numParticles) break;
+
+            int x = get_x_index(count);
+            int y = get_y_index(count);
+
+            position[x] = centerX - halfSpan + col * spacing;
+            position[y] = centerY - halfSpan + row * spacing;
+
+            velocity[x] = 0.0;
+            velocity[y] = 0.0;
+
+            count++;
+        }
+    }
+} 
 
 //=========================== csv saving =======================================
 
