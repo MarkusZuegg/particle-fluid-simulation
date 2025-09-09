@@ -48,10 +48,11 @@ float density_to_pressure(double density, float targetDensity, float pressureMul
 void calculate_pressure(int i, double &force_x, double &force_y, vector<double> &postion,
                         vector<double> &densities, int numParticles, int mass, float radius,
                         float targetDensity, float pressureMulti);
+void build_grid_linkedlist(vector<double> &position, vector<int> &head, vector<int> &next,
+        int numParticles, float cellSize, const box &bounds, int &gridRows, int &gridCols);
 
 int get_x_index(int i);
 int get_y_index(int i);
-int get_z_index(int i);
 float distance_from_two_points(double x1, double y1, double x2, double y2);
 
 float ploy6_kernal(float dist, float radius);
@@ -166,7 +167,7 @@ int main(int argc, char** argv)
 
         // Stop execution time (dont count file saving)
         auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start);
         totalTime += duration;
 
         // Save every saveFrames
@@ -274,8 +275,8 @@ void calculate_denisty(int i, vector<double> &densities, vector<double> &positio
 }
 
 void calculate_pressure(int i, double &force_x, double &force_y, vector<double> &postion,
-                        vector<double> &densities, int numParticles, int mass, float radius,
-                        float targetDensity, float pressureMulti)
+        vector<double> &densities, int numParticles, int mass, float radius,
+        float targetDensity, float pressureMulti)
 {
     force_x = 0.0f;
     force_y = 0.0f;
@@ -327,6 +328,76 @@ float density_to_pressure(double density, float targetDensity, float pressureMul
     float densityError = density - targetDensity;
     float pressure = densityError * pressureMulti;
     return pressure;
+}
+
+// ======================== Grid shenanigans ===================================
+
+void build_grid_linkedlist(vector<double> &position, vector<int> &head, vector<int> &next,
+        int numParticles, float cellSize, const box &bounds, int &gridRows, int &gridCols)
+{
+    float width = bounds.xmax - bounds.xmin;
+    float height = bounds.ymax - bounds.ymin;
+    gridRows = std::max(1, (int)floor(height / cellSize));
+    gridCols = std::max(1, (int)floor(width / cellSize));
+
+    int numCells = gridRows * gridCols;
+    // Reset head and next vector arrays
+    head.assign(numCells, -1);
+    next.assign(numCells, -1);
+
+    // Insert the particles
+    for (int i = 0; i < numParticles; i++) {
+        double x = position[get_x_index(i)];
+        double y = position[get_y_index(i)];
+
+        int cellX = (int)floor((x - bounds.xmin) / cellSize);
+        int cellY = (int)floor((y - bounds.ymin) / cellSize);
+        cellX = std::clamp(cellX, 0, gridCols - 1);
+        cellY = std::clamp(cellY, 0, gridRows - 1);
+
+        int cellIndex = cellX + (cellY * gridCols);
+        // Swap head with new particle (do linkedlist things)
+        next[i] = head[cellIndex];
+        head[cellIndex] = i;
+    }
+}
+
+void calculate_denisty_cell(int i, vector<double> &densities, vector<double> &position,
+        float mass, int numParticles, float radius, vector<int> &head, vector<int> &next,
+        int gridRows, int gridCols, float cellSize, const box &bounds)
+{
+    double density = 0;
+
+    double x1 = position[get_x_index(i)];
+    double y1 = position[get_y_index(i)];
+
+    // Get first particle cell position
+    int cellX = (int)floor((x1 - bounds.xmin) / cellSize);
+    int cellY = (int)floor((y1 - bounds.ymin) / cellSize);
+    cellX = std::clamp(cellX, 0, gridCols - 1);
+    cellY = std::clamp(cellY, 0, gridRows - 1);
+
+    // Go through a 3x3 of cells around the particle cell
+    for (int dy = -1; dy <+ 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            int newCellX = cellX + dx;
+            int newCellY = cellY + dy;
+            if (newCellX < 0 || newCellX >= gridCols) continue; // check x is inbounds
+            if (newCellY < 0 || newCellY >= gridRows) continue; // check y
+
+            int neighbourCell = newCellX + (newCellY * gridCols);
+            // Now loop through all particles in this cell
+            for (int j = head[neighbourCell]; j != -1; j = next[j]) {
+                double x2 = position[get_x_index(j)];
+                double y2 = position[get_y_index(j)];
+
+                float dist = distance_from_two_points(x1, y1, x2, y2);
+                float influence = ploy6_kernal(dist, radius); // Kernal for density
+                density += mass * influence;
+            }
+        }
+    }
+    densities[i] = density;
 }
 
 // =================== Kernals ====================
@@ -429,9 +500,9 @@ void init_square_particle_pos(vector<double> &position, vector<double> &velocity
             count++;
         }
     }
-} 
+}
 
-//=========================== csv saving =======================================
+// ========================== csv saving =======================================
 
 std::ofstream open_csv_file(const std::string& filename, int numParticles)
 {
