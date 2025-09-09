@@ -40,6 +40,8 @@ void init_particle_positions(vector<double> pos);
 void update_particle_position(int i, vector<double> &position, vector<double> &velocity,
         float timeStep);
 void apply_gravity(int i, vector<double> &velocity, float timeStep, float gravity);
+void predicted_positions(int i, vector<double> &position, vector<double> &velocity,
+        vector<double> &predictedPos, float timeStep);
 void calculate_denisty(int i, vector<double> &densities, vector<double> &position,
         float mass, int numParticles, float radius);
 float density_to_pressure(double density, float targetDensity, float pressureMulti);
@@ -76,21 +78,24 @@ int main(int argc, char** argv)
     argv++;
     if (argc < 1) return -1; // Check for filename arg
 
+    // Total time
+    std::chrono::microseconds totalTime;
+
     // ============= Simulation params ==================
     const int maxNumSteps = 1500;
     const int saveFrames = 1; // How many frames to save. != 0
     const int numParticles = 400;
     const double timeStep = 1.0/60.0;
-    
+
     const float gravity = 0;
     const float elasticity = 0.85;
-    
+
     const int mass = 1; // Particle mass
     const float radius = 0.1; // for particles
 
-    const float smoothingRadius = 1.2;
+    const float smoothingRadius = 1.5;
     const float targetDensity = 1.5;
-    const float pressureMulti = 1;
+    const float pressureMulti = 1.5;
 
 
     const box bounds = {10, 0, 10, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
@@ -127,11 +132,15 @@ int main(int argc, char** argv)
     float spacing = 2.0;
     init_random_particle_pos(position, velocity, numParticles, bounds, radius); // random starting pos
     for (int step = 0; step < maxNumSteps; step++) {
+        // Time execution
+        auto start = std::chrono::high_resolution_clock::now();
+    
         for (int i = 0; i < numParticles; i++) {
             // Apply gravity and calc denisties for all particles
             // TODO make it use predictive positions
             apply_gravity(i, velocity, timeStep, gravity);
-            calculate_denisty(i, densities, position, mass, numParticles, smoothingRadius);
+            predicted_positions(i, position, velocity, predictedPos, timeStep);
+            calculate_denisty(i, densities, predictedPos, mass, numParticles, smoothingRadius);
             
         }
 
@@ -139,7 +148,7 @@ int main(int argc, char** argv)
             // Calc pressure
             double forceX = 0.0f;
             double forceY = 0.0f;
-            calculate_pressure(i, forceX, forceY, position, densities,
+            calculate_pressure(i, forceX, forceY, predictedPos, densities,
                     numParticles, mass, smoothingRadius, targetDensity, pressureMulti);
             // a = f / density
             double accelX = forceX / densities[i];
@@ -155,6 +164,11 @@ int main(int argc, char** argv)
             bounce_particle(i, position, velocity, bounds, elasticity, radius);
         }
 
+        // Stop execution time (dont count file saving)
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        totalTime += duration;
+
         // Save every saveFrames
         if (step % saveFrames == 0) {
             write_particle_positions_to_csv(csvFile, position, step);
@@ -164,6 +178,7 @@ int main(int argc, char** argv)
     
     csvFile.close();
     gsd_close(&handle);
+    std::cout << totalTime.count() << std::endl;
     std::cout << "End of simulation" << std::endl;
     return 0;
 }
