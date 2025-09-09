@@ -93,7 +93,7 @@ int main(int argc, char** argv)
     // ============= Simulation params ==================
     const int maxNumSteps = 1500;
     const int saveFrames = 1; // How many frames to save. != 0
-    const int numParticles = 1000;
+    const int numParticles = 3000;
     const double timeStep = 1.0/60.0;
 
     const float gravity = 0;
@@ -106,7 +106,7 @@ int main(int argc, char** argv)
     const float targetDensity = 1.5;
     const float pressureMulti = 1;
 
-    const box bounds = {15, 0, 15, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
+    const box bounds = {30, 0, 30, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
 
     float cellSize = smoothingRadius;
     int gridRows = 0;
@@ -203,7 +203,7 @@ int main(int argc, char** argv)
     
     csvFile.close();
     gsd_close(&handle);
-    std::cout << totalTime.count() << std::endl;
+    std::cout << "Total time(minus file saving) in 'us': " << totalTime.count() << std::endl;
     std::cout << "End of simulation" << std::endl;
     return 0;
 }
