@@ -278,8 +278,8 @@ void calculate_pressure(int i, double &force_x, double &force_y, vector<double> 
         vector<double> &densities, int numParticles, int mass, float radius,
         float targetDensity, float pressureMulti)
 {
-    force_x = 0.0f;
-    force_y = 0.0f;
+    force_x = 0.0;
+    force_y = 0.0;
 
     // Get current particle position
     double x1 = postion[get_x_index(i)];
@@ -362,7 +362,7 @@ void build_grid_linkedlist(vector<double> &position, vector<int> &head, vector<i
     }
 }
 
-void calculate_denisty_cell(int i, vector<double> &densities, vector<double> &position,
+void calculate_denisty_grid(int i, vector<double> &densities, vector<double> &position,
         float mass, int numParticles, float radius, vector<int> &head, vector<int> &next,
         int gridRows, int gridCols, float cellSize, const box &bounds)
 {
@@ -398,6 +398,71 @@ void calculate_denisty_cell(int i, vector<double> &densities, vector<double> &po
         }
     }
     densities[i] = density;
+}
+
+void calculate_pressure_grid(int i, double &force_x, double &force_y, vector<double> &postion,
+        vector<double> &densities, int numParticles, int mass, float radius,
+        float targetDensity, float pressureMulti, vector<int> &head, vector<int> &next,
+        int gridRows, int gridCols, float cellSize, const box &bounds)
+{
+    force_x = 0.0;
+    force_y = 0.0;
+
+    // Get current particle position
+    double x1 = postion[get_x_index(i)];
+    double y1 = postion[get_y_index(i)];
+
+    // Get density and pressure for 1st particle
+    double density1 = densities[i];
+    float pressure1 = density_to_pressure(density1, targetDensity, pressureMulti);
+    if (density1 <= 0.0f) return;
+
+    // Get first particle cell position
+    int cellX = (int)floor((x1 - bounds.xmin) / cellSize);
+    int cellY = (int)floor((y1 - bounds.ymin) / cellSize);
+    cellX = std::clamp(cellX, 0, gridCols - 1);
+    cellY = std::clamp(cellY, 0, gridRows - 1);
+
+    // Go through a 3x3 of cells around the particle cell
+    for (int dy = -1; dy <+ 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            int newCellX = cellX + dx;
+            int newCellY = cellY + dy;
+            if (newCellX < 0 || newCellX >= gridCols) continue; // check x is inbounds
+            if (newCellY < 0 || newCellY >= gridRows) continue; // check y
+
+            int neighbourCell = newCellX + (newCellY * gridCols);
+            for (int j = head[neighbourCell]; j != -1; j = next[j]) {
+                if (j == i) continue;
+
+                // get other particle postion
+                double x2 = postion[get_x_index(j)];
+                double y2 = postion[get_y_index(j)];
+
+                // Get distance/ magnitiude
+                float dist = distance_from_two_points(x1, y1, x2, y2);
+                if (dist == 0) continue; // Either particle is same, or ontop of eachother
+
+                // Get unit vectors
+                double dirX = (x1 - x2) / dist;
+                double dirY = (y1 - y2) / dist;
+
+                // Get the slope of the kernal at the distance
+                float slope = spikey_kernal_derivative(dist, radius); // Grab the gradient of pressure change
+                // Get density and pressure for 2nd particle
+                double density2 = densities[j];
+                float pressure2 = density_to_pressure(density2, targetDensity, pressureMulti);
+
+                float gradX = dirX * slope;
+                float gradY = dirY * slope;
+                // Symetric pressure calculation
+                float coeff = -mass * (pressure1 / (density1 * density1) + pressure2 / (density2 * density2));
+
+                force_x += coeff * gradX;
+                force_y += coeff * gradY;
+            }
+        }
+    }
 }
 
 // =================== Kernals ====================
