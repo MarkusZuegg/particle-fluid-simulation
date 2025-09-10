@@ -93,7 +93,7 @@ int main(int argc, char** argv)
     // ============= Simulation params ==================
     const int maxNumSteps = 1500;
     const int saveFrames = 1; // How many frames to save. != 0
-    const int numParticles = 3000;
+    const int numParticles = 4096;
     const double timeStep = 1.0/60.0;
 
     const float gravity = 0;
@@ -362,8 +362,8 @@ void build_grid_linkedlist(vector<double> &position, vector<int> &head, vector<i
 {
     float width = bounds.xmax - bounds.xmin;
     float height = bounds.ymax - bounds.ymin;
-    gridRows = std::max(1, (int)floor(height / cellSize));
-    gridCols = std::max(1, (int)floor(width / cellSize));
+    gridRows = std::max(1, (int)ceil(height / cellSize));
+    gridCols = std::max(1, (int)ceil(width / cellSize));
 
     int numCells = gridRows * gridCols;
     // Reset head and next vector arrays
