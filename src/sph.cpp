@@ -33,6 +33,18 @@ typedef struct
     float zmin;
 } box;
 
+// Struct to hold all varibales needed for a particle
+// AoS implementation
+typedef struct
+{
+    double x;
+    double y;
+    double vx;
+    double vy;
+    double density;
+} Particle;
+
+
 // ========================= Func Protos =======================================
 
 void bounce_particle(int i, vector<double> &position, vector<double> &velocity,
@@ -69,8 +81,6 @@ float spikey_kernal_derivative(float dist, float radius);
 
 void init_random_particle_pos(vector<double> &position, vector<double> &velocity,
         int numParticles, const box &bounds, float radius);
-void init_square_particle_pos(vector<double> &position, vector<double> &velocity,
-        int numParticles, const box &bounds, float spacing);
 
 std::ofstream open_csv_file(const std::string& filename, int numParticles);
 void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& positions, const int step);
@@ -94,7 +104,7 @@ int main(int argc, char** argv)
     const int maxNumSteps = 1500;
     const int saveFrames = 1; // How many frames to save. != 0
     const int numParticles = 4096;
-    const double timeStep = 1.0/60.0;
+    const double timeStep = 1.0/120.0;
 
     const float gravity = 0;
     const float elasticity = 0.85;
@@ -104,9 +114,9 @@ int main(int argc, char** argv)
 
     const float smoothingRadius = 1.5;
     const float targetDensity = 1.5;
-    const float pressureMulti = 1;
+    const float pressureMulti = 10;
 
-    const box bounds = {30, 0, 30, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
+    const box bounds = {40, 0, 40, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
 
     float cellSize = smoothingRadius;
     int gridRows = 0;
@@ -143,7 +153,6 @@ int main(int argc, char** argv)
     }
 
     // ===================== Simulation loop ==================================
-    float spacing = 2.0;
     init_random_particle_pos(position, velocity, numParticles, bounds, radius); // random starting pos
     for (int step = 0; step < maxNumSteps; step++) {
         // Time execution
@@ -207,6 +216,8 @@ int main(int argc, char** argv)
     std::cout << "End of simulation" << std::endl;
     return 0;
 }
+
+// ===================== SoA implementation ===================================
 
 // Check if particle is out side box, if so bounce a particle off of the bounding box.
 // Simple rebound by inverting the velocity and pushing the particle back inside. Can have elasticity if wanted.
@@ -491,6 +502,41 @@ void calculate_pressure_grid(int i, double &force_x, double &force_y, vector<dou
     }
 }
 
+// ============================= AoS implementation ============================
+
+void apply_gravity_AoS(Particle &particle, float timeStep, float gravity)
+{
+    particle.vy += gravity * timeStep;
+}
+
+void update_position_AoS(Particle &particle, float timeStep)
+{
+    particle.x = particle.vx * timeStep;
+    particle.y = particle.vy * timeStep;
+}
+
+void bounce_particle_AoS(Particle &particle, const box &bounds, float elasticity, float radius)
+{
+    // check walls in x
+    if (particle.x - radius < bounds.xmin) {
+        particle.x = bounds.xmin + radius;
+        particle.vx *= -1 * elasticity;
+    }
+    if (particle.x + radius > bounds.xmax) {
+        particle.x = bounds.xmax - radius;
+        particle.vx *= -1 * elasticity;
+    }
+    // Check walls in y
+    if (particle.y - radius < bounds.ymin) {
+        particle.y = bounds.ymin + radius;
+        particle.vy *= -1 * elasticity;
+    }
+    if (particle.y + radius > bounds.ymax) {
+        particle.y = bounds.ymax - radius;
+        particle.vy *= -1 * elasticity;
+    }
+}
+
 // =================== Kernals ====================
 
 // (r^2-d^2)^3 kernal
@@ -562,34 +608,6 @@ void init_random_particle_pos(vector<double> &position, vector<double> &velocity
 
         velocity[x] = 0.0;
         velocity[y] = 0.0;
-    }
-}
-
-void init_square_particle_pos(vector<double> &position, vector<double> &velocity,
-        int numParticles, const box &bounds, float spacing)
-{
-    float centerX = 0.5 * (bounds.xmax + bounds.xmin);
-    float centerY = 0.5 * (bounds.ymax + bounds.ymin);
-
-    int gridSize = static_cast<int>(ceil(sqrt(numParticles)));
-    float halfSpan = 0.5 * (gridSize - 1) * spacing;
-
-    int count = 0;
-    for (int row = 0; row < gridSize; row++) {
-        for (int col = 0; col < gridSize; col++) {
-            if (count >= numParticles) break;
-
-            int x = get_x_index(count);
-            int y = get_y_index(count);
-
-            position[x] = centerX - halfSpan + col * spacing;
-            position[y] = centerY - halfSpan + row * spacing;
-
-            velocity[x] = 0.0;
-            velocity[y] = 0.0;
-
-            count++;
-        }
     }
 }
 
