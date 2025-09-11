@@ -59,9 +59,16 @@ typedef struct
     double density;
 } Particle;
 
+// Ensum to hold all version that can be run
+enum Versions {
+    ORGINAL = 0,
+    SoA_LINKED = 1,
+    AoS_LINKED = 2
+};
 
 // ========================= Func Protos =======================================
 
+// SoA
 void bounce_particle(int i, vector<double> &position, vector<double> &velocity,
         const box &bounds, const SimulationParams &params);
 void apply_gravity(int i, vector<double> &velocity, const SimulationParams &params);
@@ -74,6 +81,8 @@ void calculate_denisty(int i, vector<double> &densities, vector<double> &positio
 void calculate_pressure(int i, double &force_x, double &force_y, vector<double> &postion,
                         vector<double> &densities, const SimulationParams &params);
 float density_to_pressure(double density, const SimulationParams &params);
+
+// Linked list grid
 void build_grid_linkedlist(vector<double> &position, vector<int> &head, vector<int> &next,
         const SimulationParams &params, float cellSize, const box &bounds, int &gridRows, int &gridCols);
 void calculate_denisty_grid(int i, vector<double> &densities, vector<double> &position,
@@ -83,19 +92,39 @@ void calculate_pressure_grid(int i, double &force_x, double &force_y, vector<dou
         vector<double> &densities, const SimulationParams &params, vector<int> &head, vector<int> &next,
         int gridRows, int gridCols, float cellSize, const box &bounds);
 
-int get_x_index(int i);
-int get_y_index(int i);
-float distance_from_two_points(double x1, double y1, double x2, double y2);
+// AoS
+void apply_gravity_AoS(int i, vector<Particle> &particleArray, const SimulationParams &params);
+void update_position_AoS(int i, vector<Particle> &particleArray, const SimulationParams &params);
+void bounce_particle_AoS(int i, vector<Particle> &particleArray, const box &bounds, const SimulationParams &params);
+void build_grid_linkedlist_AoS(vector<Particle> &particleArray, vector<int> &head, vector<int> &next,
+        const SimulationParams &params, float cellSize, const box &bounds, int &gridRows, int &gridCols);
+void calculate_denisty_grid_AoS(int i, vector<Particle> &particleArray,
+        const SimulationParams &params, vector<int> &head, vector<int> &next,
+        int gridRows, int gridCols, float cellSize, const box &bounds);
+void calculate_pressure_grid_AoS(int i, double &force_x, double &force_y, vector<Particle> &particleArray,
+        const SimulationParams &params, vector<int> &head, vector<int> &next, int gridRows,
+        int gridCols, float cellSize, const box &bounds);
 
+// Kernals
 float ploy6_kernal(float dist, float radius);
 float spikey_kernal(float dist, float radius);
 float spikey_kernal_derivative(float dist, float radius);
 
+// General
+int get_x_index(int i);
+int get_y_index(int i);
+float distance_from_two_points(double x1, double y1, double x2, double y2);
+
+// Inits
 void init_random_particle_pos(vector<double> &position, vector<double> &velocity,
         const box &bounds, const SimulationParams &params);
+void init_random_particle_pos_AoS(vector<Particle> &particleArray,
+        const box &bounds, const SimulationParams &params);
 
+// File saving
 std::ofstream open_csv_file(const std::string& filename, const SimulationParams &params);
 void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& positions, const int step);
+void write_particle_positions_to_csv_AoS(std::ofstream &file, const vector<Particle> &particleArray, const int step);
 void save_to_json(const std::string &filename, const SimulationParams &params, const box &bounds);
 void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles,
         const box &bounds, const vector<double> &positions, const vector<double> &velocities);
@@ -142,17 +171,12 @@ int main(int argc, char** argv)
 
     const box bounds = {40, 0, 40, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
 
+    // 2 array linked list setup
     float cellSize = smoothingRadius;
     int gridRows = 0;
     int gridCols = 0;
     vector<int> head;
     vector<int> next;
-
-    // ===================== Vector arrays ================================
-    vector<double> position(numParticles * numDimensions); // x,y,z interleaved * numParticles
-    vector<double> velocity(numParticles * numDimensions); // vx,vy,vz interleaved * numParticles
-    vector<double> densities(numParticles); // Densities storing for all particles
-    vector<double> predictedPos(numParticles * numDimensions);
 
     // ========================== File Names ==============================
     std::string fileNameCsv = "logs/x" + std::string(argv[0]) + ".csv";
@@ -178,73 +202,212 @@ int main(int argc, char** argv)
 
     // ===================== Simulation loop ==================================
 
-    // Setup which version of the code to run
-    int original = 1;
-    int linkedListGrid = 2;
-    int linkedAoS = 3;
     // Change the line below to switch between each version
-    int runType = linkedListGrid;
+    int runType = AoS_LINKED;
 
-    init_random_particle_pos(position, velocity, bounds, params); // random starting pos
-    for (int step = 0; step < maxNumSteps; step++) {
-        // Time execution
-        auto start = timer::now();
-    
-        for (int i = 0; i < numParticles; i++) {
-            // Apply gravity and look one step in the future
-            apply_gravity(i, velocity, params);
-            predicted_positions(i, position, velocity, predictedPos, params);
+    // LinkedList grid + SoA approach
+    if (runType == SoA_LINKED) {
+        // ===================== Vector arrays ================================
+        vector<double> position(numParticles * numDimensions); // x,y,z interleaved * numParticles
+        vector<double> velocity(numParticles * numDimensions); // vx,vy,vz interleaved * numParticles
+        vector<double> densities(numParticles); // Densities storing for all particles
+        vector<double> predictedPos(numParticles * numDimensions);
+
+        init_random_particle_pos(position, velocity, bounds, params); // random starting pos
+        for (int step = 0; step < maxNumSteps; step++) {
+            // Time execution
+            auto start = timer::now();
+        
+            for (int i = 0; i < numParticles; i++) {
+                // Apply gravity and look one step in the future
+                apply_gravity(i, velocity, params);
+                predicted_positions(i, position, velocity, predictedPos, params);
+            }
+
+            // Create the linklist struct for grids/ cells
+            build_grid_linkedlist(predictedPos, head, next, params, cellSize, bounds,
+                    gridRows, gridCols);
+
+            for (int i = 0; i < numParticles; i++) {
+                // Calc density
+                // calculate_denisty(i, densities, predictedPos, mass, numParticles, smoothingRadius);
+                calculate_denisty_grid(i, densities, predictedPos, params, head,
+                        next, gridRows, gridCols, cellSize, bounds);
+            }
+
+            for (int i = 0; i < numParticles; i++) {
+                // Calc pressure
+                double forceX = 0.0;
+                double forceY = 0.0;
+
+                // calculate_pressure(i, forceX, forceY, predictedPos, densities,
+                //         numParticles, mass, smoothingRadius, targetDensity, pressureMulti);
+                calculate_pressure_grid(i, forceX, forceY, predictedPos, densities, params,
+                        head, next, gridRows, gridCols, cellSize, bounds);
+
+                // a = f / density
+                double accelX = forceX / densities[i];
+                double accelY = forceY / densities[i];
+                velocity[get_x_index(i)] += accelX * timeStep;
+                velocity[get_y_index(i)] += accelY * timeStep;
+
+            }
+
+            for (int i = 0; i < numParticles; i++) {
+                // Update postions and box collisions
+                update_particle_position(i, position, velocity, params);
+                bounce_particle(i, position, velocity, bounds, params);
+            }
+
+            // Stop execution time (dont count file saving)
+            totalTime += std::chrono::duration_cast<mircoseconds>(timer::now() - start);
+
+            // Save every saveFrames
+            if (step % saveFrames == 0) {
+                write_particle_positions_to_csv(csvFile, position, step);
+                write_frame_to_gsd(handle, step, numParticles, bounds, position, velocity);
+            }
         }
-
-        // Create the linklist struct for grids/ cells
-        build_grid_linkedlist(predictedPos, head, next, params, cellSize, bounds,
-                gridRows, gridCols);
-
-        for (int i = 0; i < numParticles; i++) {
-            // Calc density
-            // calculate_denisty(i, densities, predictedPos, mass, numParticles, smoothingRadius);
-            calculate_denisty_grid(i, densities, predictedPos, params, head,
-                    next, gridRows, gridCols, cellSize, bounds);
-        }
-
-        for (int i = 0; i < numParticles; i++) {
-            // Calc pressure
-            double forceX = 0.0;
-            double forceY = 0.0;
-
-            // calculate_pressure(i, forceX, forceY, predictedPos, densities,
-            //         numParticles, mass, smoothingRadius, targetDensity, pressureMulti);
-            calculate_pressure_grid(i, forceX, forceY, predictedPos, densities, params,
-                    head, next, gridRows, gridCols, cellSize, bounds);
-
-            // a = f / density
-            double accelX = forceX / densities[i];
-            double accelY = forceY / densities[i];
-            velocity[get_x_index(i)] += accelX * timeStep;
-            velocity[get_y_index(i)] += accelY * timeStep;
-
-        }
-
-        for (int i = 0; i < numParticles; i++) {
-            // Update postions and box collisions
-            update_particle_position(i, position, velocity, params);
-            bounce_particle(i, position, velocity, bounds, params);
-        }
-
-        // Stop execution time (dont count file saving)
-        totalTime += std::chrono::duration_cast<mircoseconds>(timer::now() - start);
-
-        // Save every saveFrames
-        if (step % saveFrames == 0) {
-            write_particle_positions_to_csv(csvFile, position, step);
-            write_frame_to_gsd(handle, step, numParticles, bounds, position, velocity);
-        }
+        
+        csvFile.close();
+        gsd_close(&handle);
+        std::cout << "Total time(minus file saving) in 'us': " << totalTime.count() << std::endl;
+        std::cout << "End of simulation" << std::endl;
+        return 0;
     }
-    
-    csvFile.close();
-    gsd_close(&handle);
-    std::cout << "Total time(minus file saving) in 'us': " << totalTime.count() << std::endl;
-    std::cout << "End of simulation" << std::endl;
+
+    // LinkedList grid + AoS approach
+    if (runType == AoS_LINKED) {
+        vector<Particle> particleArray(numParticles);
+
+        init_random_particle_pos_AoS(particleArray, bounds, params); // random starting pos
+        for (int step = 0; step < maxNumSteps; step++) {
+            // Time execution
+            auto start = timer::now();
+        
+            for (int i = 0; i < numParticles; i++) {
+                // Apply gravity and look one step in the future
+                apply_gravity_AoS(i, particleArray, params);
+                // predicted_positions(i, particleArray, predictedPos, params);
+            }
+
+            // Create the linklist struct for grids/ cells
+            build_grid_linkedlist_AoS(particleArray, head, next, params, cellSize, bounds,
+                    gridRows, gridCols);
+
+            for (int i = 0; i < numParticles; i++) {
+                // Calc density
+                // calculate_denisty(i, densities, predictedPos, mass, numParticles, smoothingRadius);
+                calculate_denisty_grid_AoS(i, particleArray, params, head,
+                        next, gridRows, gridCols, cellSize, bounds);
+            }
+
+            for (int i = 0; i < numParticles; i++) {
+                // Calc pressure
+                double forceX = 0.0;
+                double forceY = 0.0;
+
+                // calculate_pressure(i, forceX, forceY, predictedPos, densities,
+                //         numParticles, mass, smoothingRadius, targetDensity, pressureMulti);
+                calculate_pressure_grid_AoS(i, forceX, forceY, particleArray, params,
+                        head, next, gridRows, gridCols, cellSize, bounds);
+
+                // a = f / density
+                double accelX = forceX / particleArray[i].density;
+                double accelY = forceY / particleArray[i].density;
+                particleArray[i].vx += accelX * timeStep;
+                particleArray[i].vy += accelY * timeStep;
+
+            }
+
+            for (int i = 0; i < numParticles; i++) {
+                // Update postions and box collisions
+                update_position_AoS(i, particleArray, params);
+                bounce_particle_AoS(i, particleArray, bounds, params);
+            }
+
+            // Stop execution time (dont count file saving)
+            totalTime += std::chrono::duration_cast<mircoseconds>(timer::now() - start);
+
+            // Save every saveFrames
+            if (step % saveFrames == 0) {
+                write_particle_positions_to_csv_AoS(csvFile, particleArray, step);
+                // write_frame_to_gsd(handle, step, numParticles, bounds, position, velocity);
+            }
+        }
+        
+        csvFile.close();
+        gsd_close(&handle);
+        std::cout << "Total time(minus file saving) in 'us': " << totalTime.count() << std::endl;
+        std::cout << "End of simulation" << std::endl;
+        return 0;
+
+    }
+
+    // N^2 approach + SoA
+    if (runType == ORGINAL) {
+        // ===================== Vector arrays ================================
+        vector<double> position(numParticles * numDimensions); // x,y,z interleaved * numParticles
+        vector<double> velocity(numParticles * numDimensions); // vx,vy,vz interleaved * numParticles
+        vector<double> densities(numParticles); // Densities storing for all particles
+        vector<double> predictedPos(numParticles * numDimensions);
+
+        init_random_particle_pos(position, velocity, bounds, params); // random starting pos
+        for (int step = 0; step < maxNumSteps; step++) {
+            // Time execution
+            auto start = timer::now();
+        
+            for (int i = 0; i < numParticles; i++) {
+                // Apply gravity and look one step in the future
+                apply_gravity(i, velocity, params);
+                predicted_positions(i, position, velocity, predictedPos, params);
+            }
+
+            for (int i = 0; i < numParticles; i++) {
+                // Calc density
+                calculate_denisty(i, densities, predictedPos, params);
+            }
+
+            for (int i = 0; i < numParticles; i++) {
+                // Calc pressure
+                double forceX = 0.0;
+                double forceY = 0.0;
+
+                calculate_pressure(i, forceX, forceY, predictedPos, densities, params);
+
+                // a = f / density
+                double accelX = forceX / densities[i];
+                double accelY = forceY / densities[i];
+                velocity[get_x_index(i)] += accelX * timeStep;
+                velocity[get_y_index(i)] += accelY * timeStep;
+
+            }
+
+            for (int i = 0; i < numParticles; i++) {
+                // Update postions and box collisions
+                update_particle_position(i, position, velocity, params);
+                bounce_particle(i, position, velocity, bounds, params);
+            }
+
+            // Stop execution time (dont count file saving)
+            totalTime += std::chrono::duration_cast<mircoseconds>(timer::now() - start);
+
+            // Save every saveFrames
+            if (step % saveFrames == 0) {
+                write_particle_positions_to_csv(csvFile, position, step);
+                write_frame_to_gsd(handle, step, numParticles, bounds, position, velocity);
+            }
+        }
+        
+        csvFile.close();
+        gsd_close(&handle);
+        std::cout << "Total time(minus file saving) in 'us': " << totalTime.count() << std::endl;
+        std::cout << "End of simulation" << std::endl;
+        return 0;
+    }
+
+    // Didnt go into the if statements/ versions
+    std::cout << "Didnt pick a valid version" << std::endl;
     return 0;
 }
 
@@ -533,41 +696,41 @@ void calculate_pressure_grid(int i, double &force_x, double &force_y, vector<dou
 
 // ============================= AoS implementation ============================
 
-void apply_gravity_AoS(Particle &particle, SimulationParams &params)
+void apply_gravity_AoS(int i, vector<Particle> &particleArray, const SimulationParams &params)
 {
-    particle.vy += params.gravity * params.timeStep;
+    particleArray[i].vy += params.gravity * params.timeStep;
 }
 
-void update_position_AoS(Particle &particle, SimulationParams &params)
+void update_position_AoS(int i, vector<Particle> &particleArray, const SimulationParams &params)
 {
-    particle.x = particle.vx * params.timeStep;
-    particle.y = particle.vy * params.timeStep;
+    particleArray[i].x += particleArray[i].vx * params.timeStep;
+    particleArray[i].y += particleArray[i].vy * params.timeStep;
 }
 
-void bounce_particle_AoS(Particle &particle, const box &bounds, SimulationParams &params)
+void bounce_particle_AoS(int i, vector<Particle> &particleArray, const box &bounds, const SimulationParams &params)
 {
     // check walls in x
-    if (particle.x - params.radius < bounds.xmin) {
-        particle.x = bounds.xmin + params.radius;
-        particle.vx *= -1 * params.elasticity;
+    if (particleArray[i].x - params.radius < bounds.xmin) {
+        particleArray[i].x = bounds.xmin + params.radius;
+        particleArray[i].vx *= -1 * params.elasticity;
     }
-    if (particle.x + params.radius > bounds.xmax) {
-        particle.x = bounds.xmax - params.radius;
-        particle.vx *= -1 * params.elasticity;
+    if (particleArray[i].x + params.radius > bounds.xmax) {
+        particleArray[i].x = bounds.xmax - params.radius;
+        particleArray[i].vx *= -1 * params.elasticity;
     }
     // Check walls in y
-    if (particle.y - params.radius < bounds.ymin) {
-        particle.y = bounds.ymin + params.radius;
-        particle.vy *= -1 * params.elasticity;
+    if (particleArray[i].y - params.radius < bounds.ymin) {
+        particleArray[i].y = bounds.ymin + params.radius;
+        particleArray[i].vy *= -1 * params.elasticity;
     }
-    if (particle.y + params.radius > bounds.ymax) {
-        particle.y = bounds.ymax - params.radius;
-        particle.vy *= -1 * params.elasticity;
+    if (particleArray[i].y + params.radius > bounds.ymax) {
+        particleArray[i].y = bounds.ymax - params.radius;
+        particleArray[i].vy *= -1 * params.elasticity;
     }
 }
 
 void build_grid_linkedlist_AoS(vector<Particle> &particleArray, vector<int> &head, vector<int> &next,
-        SimulationParams &params, float cellSize, const box &bounds, int &gridRows, int &gridCols)
+        const SimulationParams &params, float cellSize, const box &bounds, int &gridRows, int &gridCols)
 {
     float width = bounds.xmax - bounds.xmin;
     float height = bounds.ymax - bounds.ymin;
@@ -597,7 +760,7 @@ void build_grid_linkedlist_AoS(vector<Particle> &particleArray, vector<int> &hea
 }
 
 void calculate_denisty_grid_AoS(int i, vector<Particle> &particleArray,
-        SimulationParams &params, vector<int> &head, vector<int> &next,
+        const SimulationParams &params, vector<int> &head, vector<int> &next,
         int gridRows, int gridCols, float cellSize, const box &bounds)
 {
     double density = 0;
@@ -634,7 +797,7 @@ void calculate_denisty_grid_AoS(int i, vector<Particle> &particleArray,
     particleArray[i].density = density;
 }
 
-void calculate_pressure_grid_Aos(int i, double &force_x, double &force_y, vector<Particle> &particleArray,
+void calculate_pressure_grid_AoS(int i, double &force_x, double &force_y, vector<Particle> &particleArray,
         const SimulationParams &params, vector<int> &head, vector<int> &next, int gridRows,
         int gridCols, float cellSize, const box &bounds)
 {
@@ -790,6 +953,8 @@ void init_random_particle_pos_AoS(vector<Particle> &particleArray,
 
         particleArray[i].vx = 0.0;
         particleArray[i].vy = 0.0;
+
+        particleArray[i].density = 0.0;
     }
 }
 
@@ -817,6 +982,19 @@ void write_particle_positions_to_csv(std::ofstream &file, const vector<double>& 
         file << step << ',';
         for (size_t i = 0; i < positions.size(); ++i) {
             file << positions[i] << (i == positions.size() - 1 ? "" : ",");
+        }
+        file << "\n";
+    } else {
+        std::cerr << "Unable to open file" << std::endl;
+    }
+}
+
+void write_particle_positions_to_csv_AoS(std::ofstream &file, const vector<Particle> &particleArray, const int step)
+{
+    if (file.is_open()) {
+        file << step << ',';
+        for (size_t i = 0; i < particleArray.size(); ++i) {
+            file << particleArray[i].x << particleArray[i].y << (i == particleArray.size() - 1 ? "" : ",");
         }
         file << "\n";
     } else {
