@@ -775,15 +775,16 @@ void init_random_particle_pos(vector<double> &position, vector<double> &velocity
 }
 
 void init_random_particle_pos_AoS(vector<Particle> &particleArray,
-        int numParticles, const box &bounds, float radius)
+        const box &bounds, const SimulationParams &params)
 {
+    float radius = params.radius;
     std::random_device rd;
     std::mt19937 gen(rd());
 
     std::uniform_real_distribution<double> pos_x(bounds.xmin + radius, bounds.xmax - radius);
     std::uniform_real_distribution<double> pos_y(bounds.ymin + radius, bounds.ymax - radius);
 
-    for (int i = 0; i < numParticles; i++) {
+    for (int i = 0; i < params.numParticles; i++) {
         particleArray[i].x = pos_x(gen);
         particleArray[i].y = pos_y(gen);
 
@@ -830,13 +831,19 @@ void save_to_json(const std::string &filename, const SimulationParams &params, c
 {
     cJSON *json = cJSON_CreateObject();
     cJSON_AddNumberToObject(json, "numParticles", params.numParticles);
+    cJSON_AddNumberToObject(json, "timeStep", params.timeStep);
+    cJSON_AddNumberToObject(json, "gravity", params.gravity);
+    cJSON_AddNumberToObject(json, "elasticity", params.elasticity);
+    cJSON_AddNumberToObject(json, "mass", params.mass);
     cJSON_AddNumberToObject(json, "radius", params.radius);
+    cJSON_AddNumberToObject(json, "smoothingRadius", params.smoothingRadius);
+    cJSON_AddNumberToObject(json, "targetDensity", params.targetDensity);
+    cJSON_AddNumberToObject(json, "pressureMulti", params.pressureMulti);
     cJSON_AddNumberToObject(json, "xmax", bounds.xmax);
     cJSON_AddNumberToObject(json, "xmin", bounds.xmin);
     cJSON_AddNumberToObject(json, "ymax", bounds.ymax);
     cJSON_AddNumberToObject(json, "ymin", bounds.ymin);
-    cJSON_AddNumberToObject(json, "zmax", bounds.zmax);
-    cJSON_AddNumberToObject(json, "zmin", bounds.zmin);
+    
 
     char *json_string = cJSON_Print(json);
     std::ofstream file(filename);
