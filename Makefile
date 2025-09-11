@@ -10,6 +10,7 @@ CFLAGS = -std=c11
 LIBCFLAGS = -std=c11
 CXXFLAGS = -Wall -pedantic -Wextra -std=c++2a -I$(LIBDIR) -L$(LIBDIR)
 DEBUG = -g
+OPT = -O2
 
 # Target
 TARGET = $(SRCDIR)/sph
@@ -23,13 +24,22 @@ OBJS = $(BINDIR)/sph.o $(patsubst $(LIBDIR)/%.c,$(BINDIR)/%.o,$(SRC_C))
 
 # Default goal
 .DEFAULT_GOAL := all
-.PHONY: clean debug all
+.PHONY: clean debug all gprof opti
 
 all: $(TARGET)
 
 debug: CFLAGS += $(DEBUG)
 debug: CXXFLAGS += $(DEBUG)
 debug: clean $(TARGET)
+
+gprof: LIBCFLAGS += -pg
+gprof: CXXFLAGS += -pg
+gprof: clean $(TARGET)
+
+opti: CFLAGS += $(OPT)
+opti: LIBCFLAGS += $(OPT)
+opti: CXXFLAGS += $(OPT)
+opti: clean $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) $(OBJS) -o $(TARGET)
@@ -47,4 +57,4 @@ $(BINDIR)/%.o: $(LIBDIR)/%.c | $(BINDIR)
 	$(CC) $(LIBCFLAGS) -c $< -o $@
 
 clean:
-	rm -rf $(BINDIR) $(TARGET)
+	rm -rf $(BINDIR) $(TARGET) src/gmon.out src/analysis.txt
