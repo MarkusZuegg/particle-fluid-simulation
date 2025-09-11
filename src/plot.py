@@ -51,7 +51,7 @@ def animate_simulation(csv_file, json_file):
         return scat, title
 
     ani = FuncAnimation(fig, update, frames=num_frames,
-                        init_func=init, blit=True, interval=50, repeat=False)
+                        init_func=init, blit=True, interval=60, repeat=False)
 
     plt.show()
 
