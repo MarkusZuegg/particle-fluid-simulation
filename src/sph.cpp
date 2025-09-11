@@ -154,6 +154,12 @@ int main(int argc, char** argv)
 
     // ===================== Simulation loop ==================================
     init_random_particle_pos(position, velocity, numParticles, bounds, radius); // random starting pos
+
+    // Setup which version of the code to run
+    int original = 1;
+    int linkedListGrid = 2;
+    int linkedAoS = 3;
+
     for (int step = 0; step < maxNumSteps; step++) {
         // Time execution
         auto start = timer::now();
@@ -537,6 +543,140 @@ void bounce_particle_AoS(Particle &particle, const box &bounds, float elasticity
     }
 }
 
+void build_grid_linkedlist_AoS(vector<Particle> &particleArray, vector<int> &head, vector<int> &next,
+        int numParticles, float cellSize, const box &bounds, int &gridRows, int &gridCols)
+{
+    float width = bounds.xmax - bounds.xmin;
+    float height = bounds.ymax - bounds.ymin;
+    gridRows = std::max(1, (int)ceil(height / cellSize));
+    gridCols = std::max(1, (int)ceil(width / cellSize));
+
+    int numCells = gridRows * gridCols;
+    // Reset head and next vector arrays
+    head.assign(numCells, -1);
+    next.assign(numParticles, -1);
+
+    // Insert the particles
+    for (int i = 0; i < numParticles; i++) {
+        double x = particleArray[i].x;
+        double y = particleArray[i].y;
+
+        int cellX = (int)floor((x - bounds.xmin) / cellSize);
+        int cellY = (int)floor((y - bounds.ymin) / cellSize);
+        cellX = std::clamp(cellX, 0, gridCols - 1);
+        cellY = std::clamp(cellY, 0, gridRows - 1);
+
+        int cellIndex = cellX + (cellY * gridCols);
+        // Swap head with new particle (do linkedlist things)
+        next[i] = head[cellIndex];
+        head[cellIndex] = i;
+    }
+}
+
+void calculate_denisty_grid_AoS(int i, vector<Particle> &particleArray,
+        float mass, float radius, vector<int> &head, vector<int> &next,
+        int gridRows, int gridCols, float cellSize, const box &bounds)
+{
+    double density = 0;
+
+    double x1 = particleArray[i].x;
+    double y1 = particleArray[i].y;
+
+    // Get first particle cell position
+    int cellX = (int)floor((x1 - bounds.xmin) / cellSize);
+    int cellY = (int)floor((y1 - bounds.ymin) / cellSize);
+    cellX = std::clamp(cellX, 0, gridCols - 1);
+    cellY = std::clamp(cellY, 0, gridRows - 1);
+
+    // Go through a 3x3 of cells around the particle cell
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            int newCellX = cellX + dx;
+            int newCellY = cellY + dy;
+            if (newCellX < 0 || newCellX >= gridCols) continue; // check x is inbounds
+            if (newCellY < 0 || newCellY >= gridRows) continue; // check y
+
+            int neighbourCell = newCellX + (newCellY * gridCols);
+            // Now loop through all particles in this cell
+            for (int j = head[neighbourCell]; j != -1; j = next[j]) {
+                double x2 = particleArray[j].x;
+                double y2 = particleArray[j].y;
+
+                float dist = distance_from_two_points(x1, y1, x2, y2);
+                float influence = ploy6_kernal(dist, radius); // Kernal for density
+                density += mass * influence;
+            }
+        }
+    }
+    particleArray[i].density = density;
+}
+
+void calculate_pressure_grid_Aos(int i, double &force_x, double &force_y, vector<Particle> &particleArray,
+        int mass, float radius, float targetDensity, float pressureMulti,
+        vector<int> &head, vector<int> &next, int gridRows, int gridCols,
+        float cellSize, const box &bounds)
+{
+    force_x = 0.0;
+    force_y = 0.0;
+
+    // Get current particle position
+    double x1 = particleArray[i].x;
+    double y1 = particleArray[i].y;
+
+    // Get density and pressure for 1st particle
+    double density1 = particleArray[i].density;
+    float pressure1 = density_to_pressure(density1, targetDensity, pressureMulti);
+    if (density1 <= 0.0) return;
+
+    // Get first particle cell position
+    int cellX = (int)floor((x1 - bounds.xmin) / cellSize);
+    int cellY = (int)floor((y1 - bounds.ymin) / cellSize);
+    cellX = std::clamp(cellX, 0, gridCols - 1);
+    cellY = std::clamp(cellY, 0, gridRows - 1);
+
+    // Go through a 3x3 of cells around the particle cell
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            int newCellX = cellX + dx;
+            int newCellY = cellY + dy;
+            if (newCellX < 0 || newCellX >= gridCols) continue; // check x is inbounds
+            if (newCellY < 0 || newCellY >= gridRows) continue; // check y
+
+            int neighbourCell = newCellX + (newCellY * gridCols);
+            // Now loop through all particles in this cell
+            for (int j = head[neighbourCell]; j != -1; j = next[j]) {
+                if (j == i) continue;
+
+                // get other particle postion
+                double x2 = particleArray[j].x;
+                double y2 = particleArray[j].y;
+
+                // Get distance/ magnitiude
+                float dist = distance_from_two_points(x1, y1, x2, y2);
+                if (dist == 0) continue; // Either particle is same, or ontop of eachother
+
+                // Get unit vectors
+                double dirX = (x1 - x2) / dist;
+                double dirY = (y1 - y2) / dist;
+
+                // Get the slope of the kernal at the distance
+                float slope = spikey_kernal_derivative(dist, radius); // Grab the gradient of pressure change
+                // Get density and pressure for 2nd particle
+                double density2 = particleArray[j].density;
+                float pressure2 = density_to_pressure(density2, targetDensity, pressureMulti);
+
+                float gradX = dirX * slope;
+                float gradY = dirY * slope;
+                // Symetric pressure calculation
+                float coeff = -mass * (pressure1 / (density1 * density1) + pressure2 / (density2 * density2));
+
+                force_x += coeff * gradX;
+                force_y += coeff * gradY;
+            }
+        }
+    }
+}
+
 // =================== Kernals ====================
 
 // (r^2-d^2)^3 kernal
@@ -673,6 +813,7 @@ void save_to_json(const std::string &filename, const int numParticles, const flo
 
 // ====================== GSD file formats =============================
 
+// REF: Got chatGPT to make most of this, I removed the error handling (exessive)
 void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles,
         const box &bounds, const vector<double> &positions, const vector<double> &velocities)
 {
