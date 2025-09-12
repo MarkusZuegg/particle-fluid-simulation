@@ -2,4 +2,6 @@
 COSC3500_Milestone.pdf
 src/sph
 src/logs/
+src/gmon.out
+src/analysis.txt
 bin/

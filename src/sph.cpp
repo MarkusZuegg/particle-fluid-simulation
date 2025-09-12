@@ -114,6 +114,8 @@ float spikey_kernal_derivative(float dist, float radius);
 int get_x_index(int i);
 int get_y_index(int i);
 float distance_from_two_points(float x1, float y1, float x2, float y2);
+inline float fast_sqrt(float x);
+float fast_distance(float x1, float y1, float x2, float y2);
 
 // Inits
 void init_random_particle_pos(vector<float> &position, vector<float> &velocity,
@@ -143,7 +145,7 @@ int main(int argc, char** argv)
     // ============= Simulation params ==================
     const int maxNumSteps = 240;
     const int saveFrames = 1; // How many frames to save. != 0
-    const int numParticles = 4096;
+    const int numParticles = 8000;
     const float timeStep = 1.0/120.0;
 
     const float gravity = 0;
@@ -788,7 +790,7 @@ void calculate_denisty_grid_AoS(int i, vector<Particle> &particleArray,
                 float x2 = particleArray[j].x;
                 float y2 = particleArray[j].y;
 
-                float dist = distance_from_two_points(x1, y1, x2, y2);
+                float dist = fast_distance(x1, y1, x2, y2);
                 float influence = ploy6_kernal(dist, params.smoothingRadius); // Kernal for density
                 density += params.mass * influence;
             }
@@ -837,7 +839,7 @@ void calculate_pressure_grid_AoS(int i, float &force_x, float &force_y, vector<P
                 float y2 = particleArray[j].y;
 
                 // Get distance/ magnitiude
-                float dist = distance_from_two_points(x1, y1, x2, y2);
+                float dist = fast_distance(x1, y1, x2, y2);
                 if (dist == 0) continue; // Either particle is same, or ontop of eachother
 
                 // Get unit vectors
@@ -912,6 +914,25 @@ float distance_from_two_points(float x1, float y1, float x2, float y2)
     float sum = square_diff_x + square_diff_y;
     float value = sqrt(sum); //TODO make this quicker
     return value;
+}
+
+// Fast invverse sqrt from Quake 3 baby!!!!
+inline float fast_sqrt(float x)
+{
+    float xhalf = 0.5f * x;
+    int i = *(int*)&x;               // evil bit-level hack
+    i = 0x5f3759df - (i >> 1);       // magic constant
+    x = *(float*)&i;
+    x = x * (1.5f - xhalf * x * x);  // 1st Newton iteration
+    return 1.0f / x;
+}
+
+float fast_distance(float x1, float y1, float x2, float y2)
+{
+    float dx = x2 - x1;
+    float dy = y2 - y1;
+    float sum = dx*dx + dy*dy;
+    return fast_sqrt(sum);
 }
 
 // Randomly generates positions for each particle
