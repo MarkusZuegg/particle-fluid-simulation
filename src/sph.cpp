@@ -65,7 +65,8 @@ typedef struct
 enum Versions {
     SoA = 0, //n^2 approach
     SoA_LINKED = 1, // struct of arrays, with linkedlist grid
-    AoS_LINKED = 2 // array of structs, with linkedlist grid
+    AoS_LINKED = 2, // array of structs, with linkedlist grid
+    AoS_SORTED = 3 // array of structs, with sorted grid
 };
 
 // ========================= Func Protos =======================================
@@ -108,6 +109,13 @@ void calculate_pressure_grid_AoS(int i, float &force_x, float &force_y, vector<P
         int gridCols, float cellSize, const box &bounds);
 
 // AoS with hash + sorting
+void build_grid_sorted(vector<Particle> &particleArray, vector<int> &cellStart, const SimulationParams &params,
+    float cellSize, const box &bounds, int &gridRows, int &gridCols);
+void calculate_density_sorted(int i, vector<Particle> &particleArray, const SimulationParams &params,
+    vector<int> &cellStart, int &gridRows, int &gridCols, float cellSize, const box &bounds);
+void calculate_pressure_sorted(int i, float &force_x, float &force_y, vector<Particle> &particleArray,
+        const SimulationParams &params, const vector<int> &cellStart, int gridRows, int gridCols,
+        float cellSize, const box &bounds);
 
 // Kernals
 float ploy6_kernal(float dist, float radius);
@@ -163,7 +171,7 @@ int main(int argc, char** argv)
     const float pressureMulti = 10;
 
     // Change the line below to switch between each version
-    int runType = AoS_LINKED;
+    int runType = AoS_SORTED;
 
     // Set up struct to hold params
     const SimulationParams params = {
@@ -186,6 +194,9 @@ int main(int argc, char** argv)
     int gridCols = 0;
     vector<int> head;
     vector<int> next;
+
+    // setup for sorted
+    vector<int> cellStart;
 
     // ========================== File Names ==============================
     std::string fileNameCsv = "logs/x" + std::string(argv[0]) + ".csv";
@@ -347,7 +358,68 @@ int main(int argc, char** argv)
         std::cout << "Total time(minus file saving) in 'us': " << totalTime.count() << std::endl;
         std::cout << "End of simulation" << std::endl;
         return 0;
+    }
 
+    // LinkedList grid + AoS approach
+    if (runType == AoS_SORTED) {
+        vector<Particle> particleArray(numParticles);
+
+        init_random_particle_pos_AoS(particleArray, bounds, params); // random starting pos
+        for (int step = 0; step < maxNumSteps; step++) {
+            // Time execution
+            auto start = timer::now();
+        
+            for (int i = 0; i < numParticles; i++) {
+                // Apply gravity and look one step in the future
+                apply_gravity_AoS(i, particleArray, params);
+            }
+
+            // Create the linklist struct for grids/ cells
+            build_grid_sorted(particleArray,  cellStart, params, cellSize, bounds,
+                    gridRows, gridCols);
+
+            for (int i = 0; i < numParticles; i++) {
+                // Calc density
+                calculate_density_sorted(i, particleArray, params, cellStart, gridRows, gridCols, cellSize, bounds);
+            }
+
+            for (int i = 0; i < numParticles; i++) {
+                // Calc pressure
+                float forceX = 0.0;
+                float forceY = 0.0;
+
+                calculate_pressure_sorted(i, forceX, forceY, particleArray, params,
+                        cellStart, gridRows, gridCols, cellSize, bounds);
+
+                // a = f / density
+                float accelX = forceX / particleArray[i].density;
+                float accelY = forceY / particleArray[i].density;
+                particleArray[i].vx += accelX * timeStep;
+                particleArray[i].vy += accelY * timeStep;
+
+            }
+
+            for (int i = 0; i < numParticles; i++) {
+                // Update postions and box collisions
+                update_position_AoS(i, particleArray, params);
+                bounce_particle_AoS(i, particleArray, bounds, params);
+            }
+
+            // Stop execution time (dont count file saving)
+            totalTime += std::chrono::duration_cast<mircoseconds>(timer::now() - start);
+
+            // Save every saveFrames
+            if (step % saveFrames == 0) {
+                write_particle_positions_to_csv_AoS(csvFile, particleArray, step);
+                // write_frame_to_gsd(handle, step, numParticles, bounds, position, velocity);
+            }
+        }
+        
+        csvFile.close();
+        gsd_close(&handle);
+        std::cout << "Total time(minus file saving) in 'us': " << totalTime.count() << std::endl;
+        std::cout << "End of simulation" << std::endl;
+        return 0;
     }
 
     // N^2 approach + SoA
@@ -870,8 +942,8 @@ void calculate_pressure_grid_AoS(int i, float &force_x, float &force_y, vector<P
 
 // ======================== Hash and sort approach ======================================
 
-void build_grid_sorted(std::vector<Particle> &particleArray, std::vector<int> &cellStart,
-        const SimulationParams &params, float cellSize, const box &bounds, int &gridRows, int &gridCols)
+void build_grid_sorted(vector<Particle> &particleArray, vector<int> &cellStart, const SimulationParams &params,
+    float cellSize, const box &bounds, int &gridRows, int &gridCols)
 {
     float width = bounds.xmax - bounds.xmin;
     float height = bounds.ymax - bounds.ymin;
@@ -909,8 +981,8 @@ void build_grid_sorted(std::vector<Particle> &particleArray, std::vector<int> &c
     }
 }
 
-void calculate_density_sorted(int i, std::vector<Particle> &particleArray, std::vector<int> &cellStart,
-        const SimulationParams &params, float cellSize, const box &bounds, int &gridRows, int &gridCols)
+void calculate_density_sorted(int i, vector<Particle> &particleArray, const SimulationParams &params,
+    vector<int> &cellStart, int &gridRows, int &gridCols, float cellSize, const box &bounds)
 {
     float density = 0;
 
@@ -950,8 +1022,8 @@ void calculate_density_sorted(int i, std::vector<Particle> &particleArray, std::
     particleArray[i].density = density;
 }
 
-void calculate_pressure_sorted_AoS_0_indexed(int i, float &force_x, float &force_y, std::vector<Particle> &particleArray,
-        const SimulationParams &params, const std::vector<int> &cellStart, int gridRows, int gridCols,
+void calculate_pressure_sorted(int i, float &force_x, float &force_y, vector<Particle> &particleArray,
+        const SimulationParams &params, const vector<int> &cellStart, int gridRows, int gridCols,
         float cellSize, const box &bounds)
 {
     force_x = 0.0;
