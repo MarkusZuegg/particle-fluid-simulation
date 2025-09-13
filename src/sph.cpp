@@ -57,11 +57,13 @@ typedef struct
     float vx;
     float vy;
     float density;
+    int gridHash;
 } Particle;
+
 
 // Ensum to hold all version that can be run
 enum Versions {
-    ORGINAL = 0, //n^2 approach
+    SoA = 0, //n^2 approach
     SoA_LINKED = 1, // struct of arrays, with linkedlist grid
     AoS_LINKED = 2 // array of structs, with linkedlist grid
 };
@@ -105,6 +107,8 @@ void calculate_pressure_grid_AoS(int i, float &force_x, float &force_y, vector<P
         const SimulationParams &params, vector<int> &head, vector<int> &next, int gridRows,
         int gridCols, float cellSize, const box &bounds);
 
+// AoS with hash + sorting
+
 // Kernals
 float ploy6_kernal(float dist, float radius);
 float spikey_kernal(float dist, float radius);
@@ -145,7 +149,7 @@ int main(int argc, char** argv)
     // ============= Simulation params ==================
     const int maxNumSteps = 240;
     const int saveFrames = 1; // How many frames to save. != 0
-    const int numParticles = 8000;
+    const int numParticles = 40000;
     const float timeStep = 1.0/120.0;
 
     const float gravity = 0;
@@ -157,6 +161,9 @@ int main(int argc, char** argv)
     const float smoothingRadius = 1.5;
     const float targetDensity = 1.5;
     const float pressureMulti = 10;
+
+    // Change the line below to switch between each version
+    int runType = AoS_LINKED;
 
     // Set up struct to hold params
     const SimulationParams params = {
@@ -203,9 +210,6 @@ int main(int argc, char** argv)
     }
 
     // ===================== Simulation loop ==================================
-
-    // Change the line below to switch between each version
-    int runType = AoS_LINKED;
 
     // LinkedList grid + SoA approach
     if (runType == SoA_LINKED) {
@@ -347,7 +351,7 @@ int main(int argc, char** argv)
     }
 
     // N^2 approach + SoA
-    if (runType == ORGINAL) {
+    if (runType == SoA) {
         // ===================== Vector arrays ================================
         vector<float> position(numParticles * numDimensions); // x,y,z interleaved * numParticles
         vector<float> velocity(numParticles * numDimensions); // vx,vy,vz interleaved * numParticles
@@ -790,7 +794,7 @@ void calculate_denisty_grid_AoS(int i, vector<Particle> &particleArray,
                 float x2 = particleArray[j].x;
                 float y2 = particleArray[j].y;
 
-                float dist = fast_distance(x1, y1, x2, y2);
+                float dist = distance_from_two_points(x1, y1, x2, y2);
                 float influence = ploy6_kernal(dist, params.smoothingRadius); // Kernal for density
                 density += params.mass * influence;
             }
@@ -839,7 +843,7 @@ void calculate_pressure_grid_AoS(int i, float &force_x, float &force_y, vector<P
                 float y2 = particleArray[j].y;
 
                 // Get distance/ magnitiude
-                float dist = fast_distance(x1, y1, x2, y2);
+                float dist = distance_from_two_points(x1, y1, x2, y2);
                 if (dist == 0) continue; // Either particle is same, or ontop of eachother
 
                 // Get unit vectors
@@ -860,6 +864,47 @@ void calculate_pressure_grid_AoS(int i, float &force_x, float &force_y, vector<P
                 force_x += coeff * gradX;
                 force_y += coeff * gradY;
             }
+        }
+    }
+}
+
+// ======================== Hash and sort approach ======================================
+
+void build_grid_sorted(std::vector<Particle> &particleArray, std::vector<int> &cellStart,
+                       const SimulationParams &params, float cellSize, const box &bounds, int &gridRows, int &gridCols)
+{
+    float width = bounds.xmax - bounds.xmin;
+    float height = bounds.ymax - bounds.ymin;
+    gridRows = std::max(1, (int)ceil(height / cellSize));
+    gridCols = std::max(1, (int)ceil(width / cellSize));
+
+    int numCells = gridRows * gridCols;
+    cellStart.assign(numCells, -1);
+
+    // Find hash for each particle
+    for (int i = 0; i < params.numParticles; i++) {
+        float x = particleArray[i].x;
+        float y = particleArray[i].y;
+
+        int cellX = (int)floor((x - bounds.xmin) / cellSize);
+        int cellY = (int)floor((y - bounds.ymin) / cellSize);
+        cellX = std::clamp(cellX, 0, gridCols - 1);
+        cellY = std::clamp(cellY, 0, gridRows - 1);
+
+        particleArray[i].gridHash = cellX + (cellY * gridCols);
+    }
+
+    // Sort now according to gridHash
+    std::sort(particleArray.begin(), particleArray.end(), [](const Particle& a, const Particle& b) {
+        return a.gridHash < b.gridHash;
+    });
+
+    // Find the start of each cell in the array of particles
+    if (params.numParticles == 0) return;
+    cellStart[particleArray[0].gridHash] = 0;
+    for (int i = 1; i < params.numParticles; i++) {
+        if (particleArray[i].gridHash != particleArray[i-1].gridHash) {
+            cellStart[particleArray[i].gridHash] = i;
         }
     }
 }
@@ -919,12 +964,12 @@ float distance_from_two_points(float x1, float y1, float x2, float y2)
 // Fast invverse sqrt from Quake 3 baby!!!!
 inline float fast_sqrt(float x)
 {
-    float xhalf = 0.5f * x;
-    int i = *(int*)&x;               // evil bit-level hack
-    i = 0x5f3759df - (i >> 1);       // magic constant
+    float xhalf = 0.5 * x;
+    int i = *(int*)&x; // evil bit-level hack
+    i = 0x5f3759d - (i >> 1); // magic constant
     x = *(float*)&i;
-    x = x * (1.5f - xhalf * x * x);  // 1st Newton iteration
-    return 1.0f / x;
+    x = x * (1.5 - xhalf * x * x); // 1st Newton iteration
+    return 1.0 / x;
 }
 
 float fast_distance(float x1, float y1, float x2, float y2)
