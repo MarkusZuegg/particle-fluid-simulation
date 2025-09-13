@@ -157,7 +157,7 @@ int main(int argc, char** argv)
     // ============= Simulation params ==================
     const int maxNumSteps = 240;
     const int saveFrames = 1; // How many frames to save. != 0
-    const int numParticles = 40000;
+    const int numParticles = 10000;
     const float timeStep = 1.0/120.0;
 
     const float gravity = 0;
@@ -247,7 +247,6 @@ int main(int argc, char** argv)
 
             for (int i = 0; i < numParticles; i++) {
                 // Calc density
-                // calculate_denisty(i, densities, predictedPos, mass, numParticles, smoothingRadius);
                 calculate_denisty_grid(i, densities, predictedPos, params, head,
                         next, gridRows, gridCols, cellSize, bounds);
             }
@@ -257,8 +256,6 @@ int main(int argc, char** argv)
                 float forceX = 0.0;
                 float forceY = 0.0;
 
-                // calculate_pressure(i, forceX, forceY, predictedPos, densities,
-                //         numParticles, mass, smoothingRadius, targetDensity, pressureMulti);
                 calculate_pressure_grid(i, forceX, forceY, predictedPos, densities, params,
                         head, next, gridRows, gridCols, cellSize, bounds);
 
@@ -305,7 +302,6 @@ int main(int argc, char** argv)
             for (int i = 0; i < numParticles; i++) {
                 // Apply gravity and look one step in the future
                 apply_gravity_AoS(i, particleArray, params);
-                // predicted_positions(i, particleArray, predictedPos, params);
             }
 
             // Create the linklist struct for grids/ cells
@@ -314,7 +310,6 @@ int main(int argc, char** argv)
 
             for (int i = 0; i < numParticles; i++) {
                 // Calc density
-                // calculate_denisty(i, densities, predictedPos, mass, numParticles, smoothingRadius);
                 calculate_denisty_grid_AoS(i, particleArray, params, head,
                         next, gridRows, gridCols, cellSize, bounds);
             }
@@ -324,8 +319,6 @@ int main(int argc, char** argv)
                 float forceX = 0.0;
                 float forceY = 0.0;
 
-                // calculate_pressure(i, forceX, forceY, predictedPos, densities,
-                //         numParticles, mass, smoothingRadius, targetDensity, pressureMulti);
                 calculate_pressure_grid_AoS(i, forceX, forceY, particleArray, params,
                         head, next, gridRows, gridCols, cellSize, bounds);
 
@@ -1081,7 +1074,7 @@ void calculate_pressure_sorted(int i, float &force_x, float &force_y, vector<Par
 // =================== Kernals ====================
 
 // (r^2-d^2)^3 kernal
-float ploy6_kernal(float dist, float radius)
+inline float ploy6_kernal(float dist, float radius)
 {
     if (dist >= radius) return 0;
     float radius2 = radius * radius;
@@ -1092,7 +1085,7 @@ float ploy6_kernal(float dist, float radius)
 }
 
 // (r-d)^3 kernal
-float spikey_kernal(float dist, float radius)
+inline float spikey_kernal(float dist, float radius)
 {
     if (dist >= radius) return 0;
     float norm = 10.0 / (M_PI * pow(radius, 5));
@@ -1101,7 +1094,7 @@ float spikey_kernal(float dist, float radius)
 }
 
 // -3(r-d)^2
-float spikey_kernal_derivative(float dist, float radius)
+inline float spikey_kernal_derivative(float dist, float radius)
 {
     if (dist >= radius || dist <= 0) return 0;
     float norm = 10.0 / (M_PI * pow(radius, 5));
@@ -1121,7 +1114,7 @@ int get_y_index(int i)
     return i * numDimensions + 1;
 }
 
-float distance_from_two_points(float x1, float y1, float x2, float y2)
+inline float distance_from_two_points(float x1, float y1, float x2, float y2)
 {
     float square_diff_x = (x2 - x1) * (x2 - x1);
     float square_diff_y = (y2 - y1) * (y2 - y1);
