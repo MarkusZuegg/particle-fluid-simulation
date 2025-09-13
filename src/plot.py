@@ -1,4 +1,4 @@
-import json
+# All made by chatGPT for plotting purposes only
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
