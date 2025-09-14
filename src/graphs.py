@@ -9,7 +9,7 @@ import sys
 CSV_FILE_PATH = 'data.csv'
 
 # Choose which methods to plot (leave empty to plot all)
-methods_to_plot = ['SoA', 'SoA grid', 'AoS grid', 'O-1', 'O-2']
+methods_to_plot = [ 'AoS grid', 'O-1', 'O-2']
 
 # Choose which x-values to exclude
 x_values_to_exclude = []
