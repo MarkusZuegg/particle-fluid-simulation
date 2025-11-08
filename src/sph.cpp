@@ -109,7 +109,7 @@ void init_random_particle_pos_AoS(vector<Particle> &particleArray,
 
 // File saving
 std::ofstream open_csv_file(const std::string& filename, const SimulationParams &params);
-void write_particle_positions_to_csv(std::ofstream &file, const vector<float>& positions, const int step);
+void write_particle_positions_to_csv_AoS(std::ofstream &file, const vector<Particle> &particleArray, const int step);
 void save_to_json(const std::string &filename, const SimulationParams &params, const box &bounds);
 void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles,
         const box &bounds, const vector<float> &positions, const vector<float> &velocities);
@@ -120,17 +120,18 @@ int main(int argc, char** argv)
 {
     argc--;
     argv++;
-    if (argc < 1) return -1; // Check for filename arg
+    if (argc < 1) return -1; // Check for filename arg which is jobID
 
     // Total time
     mircoseconds totalTime{0};
 
     // ============= Simulation params ==================
-    const int maxNumSteps = 240;
+    const int maxNumSteps = 100;
     const int saveFrames = 1; // How many frames to save. != 0
-    const int numParticles = 10000;
-    const float timeStep = 1.0/120.0;
+    const int numParticles = 10;
+    const float timeStep = 0.003;
 
+    // gravity!!! HERE
     const float gravity = 0;
     const float elasticity = 0.85;
 
@@ -242,8 +243,16 @@ int main(int argc, char** argv)
 
         // Save every saveFrames
         if (step % saveFrames == 0) {
-            write_particle_positions_to_csv_AoS(csvFile, particleArray, step);
-            // write_frame_to_gsd(handle, step, numParticles, bounds, position, velocity);
+            // write_particle_positions_to_csv_AoS(csvFile, particleArray, step);
+            vector<float> positions(numParticles * numDimensions);
+            vector<float> velocities(numParticles * numDimensions);
+            for(int i = 0; i < numParticles; ++i) {
+                positions[get_x_index(i)] = particleArray[i].x;
+                positions[get_y_index(i)] = particleArray[i].y;
+                velocities[get_x_index(i)] = particleArray[i].vx;
+                velocities[get_y_index(i)] = particleArray[i].vy;
+            }
+            write_frame_to_gsd(handle, step, numParticles, bounds, positions, velocities);
         }
     }
     
@@ -666,7 +675,7 @@ void write_particle_positions_to_csv_AoS(std::ofstream &file, const vector<Parti
     if (file.is_open()) {
         file << step << ',';
         for (size_t i = 0; i < particleArray.size(); ++i) {
-            file << particleArray[i].x << particleArray[i].y << (i == particleArray.size() - 1 ? "" : ",");
+            file << particleArray[i].x << "," << particleArray[i].y << (i == particleArray.size() - 1 ? "" : ",");
         }
         file << "\n";
     } else {
