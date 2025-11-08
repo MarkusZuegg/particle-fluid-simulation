@@ -45,6 +45,7 @@ typedef struct
     float smoothingRadius;
     float targetDensity;
     float pressureMulti;
+    float viscosity;
 } SimulationParams;
 
 
@@ -97,6 +98,7 @@ void calculate_pressure_sorted(int i, float &force_x, float &force_y, vector<Par
 float ploy6_kernal(float dist, float radius);
 float spikey_kernal(float dist, float radius);
 float spikey_kernal_derivative(float dist, float radius);
+inline float viscosity_kernal(float dist, float radius);
 
 // General
 int get_x_index(int i);
@@ -106,13 +108,16 @@ float distance_from_two_points(float x1, float y1, float x2, float y2);
 // Inits
 void init_random_particle_pos_AoS(vector<Particle> &particleArray,
         const box &bounds, const SimulationParams &params);
+void init_grid_particle_pos_AoS(vector<Particle> &particleArray,
+        const box &bounds, const SimulationParams &params);
 
 // File saving
 std::ofstream open_csv_file(const std::string& filename, const SimulationParams &params);
 void write_particle_positions_to_csv_AoS(std::ofstream &file, const vector<Particle> &particleArray, const int step);
 void save_to_json(const std::string &filename, const SimulationParams &params, const box &bounds);
 void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles,
-        const box &bounds, const vector<float> &positions, const vector<float> &velocities);
+        const box &bounds, const vector<float> &positions, const vector<float> &velocities,
+        const SimulationParams &params);
 
 // ========================== Functions ========================================
 
@@ -141,6 +146,7 @@ int main(int argc, char** argv)
     const float smoothingRadius = 1.5;
     const float targetDensity = 1.5;
     const float pressureMulti = 10;
+    const float viscosity = 0.5;
 
     // Change the line below to switch between each version
     int runType = AoS_SORTED;
@@ -155,7 +161,8 @@ int main(int argc, char** argv)
         .radius = radius,
         .smoothingRadius = smoothingRadius,
         .targetDensity = targetDensity,
-        .pressureMulti = pressureMulti
+        .pressureMulti = pressureMulti,
+        .viscosity = viscosity
     };
 
     const box bounds = {40, 0, 40, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
@@ -196,7 +203,8 @@ int main(int argc, char** argv)
     // LinkedList grid + AoS approach
     vector<Particle> particleArray(numParticles);
 
-    init_random_particle_pos_AoS(particleArray, bounds, params); // random starting pos
+    // init_random_particle_pos_AoS(particleArray, bounds, params); // random starting pos
+    init_grid_particle_pos_AoS(particleArray, bounds, params);
     for (int step = 0; step < maxNumSteps; step++) {
         // Time execution
         auto start = timer::now();
@@ -252,7 +260,7 @@ int main(int argc, char** argv)
                 velocities[get_x_index(i)] = particleArray[i].vx;
                 velocities[get_y_index(i)] = particleArray[i].vy;
             }
-            write_frame_to_gsd(handle, step, numParticles, bounds, positions, velocities);
+            write_frame_to_gsd(handle, step, numParticles, bounds, positions, velocities, params);
         }
     }
     
@@ -386,6 +394,10 @@ void calculate_pressure_grid_AoS(int i, float &force_x, float &force_y, vector<P
     float x1 = particleArray[i].x;
     float y1 = particleArray[i].y;
 
+    // Get current particle velocity
+    float vx1 = particleArray[i].vx;
+    float vy1 = particleArray[i].vy;
+
     // Get density and pressure for 1st particle
     float density1 = particleArray[i].density;
     float pressure1 = density_to_pressure(density1, params);
@@ -435,6 +447,18 @@ void calculate_pressure_grid_AoS(int i, float &force_x, float &force_y, vector<P
 
                 force_x += coeff * gradX;
                 force_y += coeff * gradY;
+
+                // do viscosity things
+                float influence = viscosity_kernal(dist, params.smoothingRadius);
+
+                float vx2 = particleArray[j].vx;
+                float vy2 = particleArray[j].vy;
+                
+                float vx_diff = vx2 - vx1;
+                float vy_diff = vy2 - vy1;
+
+                force_x += params.viscosity * vx_diff * influence;
+                force_y += params.viscosity * vy_diff * influence;
             }
         }
     }
@@ -609,6 +633,17 @@ inline float spikey_kernal_derivative(float dist, float radius)
     return -3.0 * norm * (influence * influence);
 }
 
+// Viscosity Kernal
+inline float viscosity_kernal(float dist, float radius)
+{
+    if (dist >= radius) return 0;
+    float norm = 45.0 / (M_PI * pow(radius, 6));
+    float influence = radius - dist;
+    return norm * influence;
+}
+
+// =============== helpers =======================
+
 // For vectors
 int get_x_index(int i)
 {
@@ -630,6 +665,8 @@ inline float distance_from_two_points(float x1, float y1, float x2, float y2)
     return value;
 }
 
+// ============= Particle INITS ==================
+
 // Randomly generates positions for each particle
 void init_random_particle_pos_AoS(vector<Particle> &particleArray,
         const box &bounds, const SimulationParams &params)
@@ -649,6 +686,59 @@ void init_random_particle_pos_AoS(vector<Particle> &particleArray,
         particleArray[i].vy = 0.0;
 
         particleArray[i].density = 0.0;
+    }
+}
+
+void init_grid_particle_pos_AoS(vector<Particle> &particleArray,
+        const box &bounds, const SimulationParams &params)
+{
+    int numParticles = params.numParticles;
+    float radius = params.radius;
+    float spacing = 2.0 * radius;
+
+    float spawnWidth = (bounds.xmax - bounds.xmin) - (2 * radius);
+    float spawnHeight = (bounds.ymax - bounds.ymin) - (2 * radius);
+
+    if (spawnWidth < 0 || spawnHeight < 0) {
+        std::cerr << "Bounding box is too small" << std::endl;
+        exit(1);
+    }
+
+    int cols_fittable = static_cast<int>(floor(spawnWidth / spacing)) + 1;
+    int rows_fittable = static_cast<int>(floor(spawnHeight / spacing)) + 1;
+    int max_particles = cols_fittable * rows_fittable;
+
+    if (numParticles > max_particles) {
+        std::cerr << "Cannot fit " << numParticles << " particles in the box" << std::endl;
+        std::cerr << "The maximum is " << max_particles << std::endl;
+        exit(1);
+    }
+
+    int actual_cols = static_cast<int>(ceil(sqrt(numParticles)));
+    int actual_rows = static_cast<int>(ceil(static_cast<float>(numParticles) / actual_cols));
+
+    float block_width = (actual_cols - 1) * spacing;
+    float block_height = (actual_rows - 1) * spacing;
+    
+    float offset_x = (spawnWidth - block_width) / 2.0f;
+    float offset_y = (spawnHeight - block_height) / 2.0f;
+
+    float startX = bounds.xmin + radius + offset_x;
+    float startY = bounds.ymin + radius + offset_y;
+
+    int currentParticle = 0;
+    for (int i = 0; i < actual_rows && currentParticle < numParticles; ++i) {
+        for (int j = 0; j < actual_cols && currentParticle < numParticles; ++j) {
+            
+            particleArray[currentParticle].x = startX + j * spacing;
+            particleArray[currentParticle].y = startY + i * spacing;
+
+            particleArray[currentParticle].vx = 0.0;
+            particleArray[currentParticle].vy = 0.0;
+            particleArray[currentParticle].density = 0.0;
+            
+            currentParticle++;
+        }
     }
 }
 
@@ -721,7 +811,8 @@ void save_to_json(const std::string &filename, const SimulationParams &params, c
 
 // REF: Got chatGPT to make most of this, I removed the error handling (exessive)
 void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles,
-        const box &bounds, const vector<float> &positions, const vector<float> &velocities)
+        const box &bounds, const vector<float> &positions, const vector<float> &velocities,
+        const SimulationParams &params)
 {
     int ret = 0;
 
@@ -743,6 +834,9 @@ void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles
         vel_float[i * 3 + 1] = static_cast<float>(velocities[get_y_index(i)]);
     }
 
+    // for saving the particle radius
+    vector<float> diameters(numParticles, 2.0f * params.radius);
+
     // Config data
     float box_data[6] = {bounds.xmax - bounds.xmin, bounds.ymax - bounds.ymin, bounds.zmax - bounds.zmin, 0, 0, 0};
     ret = gsd_write_chunk(&handle, "configuration/box", GSD_TYPE_FLOAT, 6, 1, 0, &box_data);
@@ -752,7 +846,7 @@ void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles
     ret = gsd_write_chunk(&handle, "particles/N", GSD_TYPE_UINT32, 1, 1, 0, &numParticles);
     ret = gsd_write_chunk(&handle, "particles/position", GSD_TYPE_FLOAT, numParticles, 3, 0, pos_float.data());
     ret = gsd_write_chunk(&handle, "particles/velocity", GSD_TYPE_FLOAT, numParticles, 3, 0, vel_float.data());
-
+    ret = gsd_write_chunk(&handle, "particles/diameter", GSD_TYPE_FLOAT, numParticles, 1, 0, diameters.data());
     // Particle ID
     vector<uint32_t> typeids(numParticles, 0);
     ret = gsd_write_chunk(&handle, "particles/typeid", GSD_TYPE_UINT32, numParticles, 1, 0, typeids.data());
