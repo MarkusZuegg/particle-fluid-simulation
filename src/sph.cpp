@@ -131,22 +131,24 @@ int main(int argc, char** argv)
     mircoseconds totalTime{0};
 
     // ============= Simulation params ==================
-    const int maxNumSteps = 100;
-    const int saveFrames = 1; // How many frames to save. != 0
-    const int numParticles = 10;
-    const float timeStep = 0.003;
+    const int maxNumSteps = 4000;
+    const int saveFrames = 10; // How many frames to save. != 0
+    const int numParticles = 625;
+    const float timeStep = 0.001;
 
     // gravity!!! HERE
-    const float gravity = 0;
-    const float elasticity = 0.85;
+    const float gravity = -9.81;
+    const float elasticity = 0.5;
 
     const int mass = 1; // Particle mass
     const float radius = 0.1; // for particles
 
-    const float smoothingRadius = 1.5;
-    const float targetDensity = 1.5;
-    const float pressureMulti = 10;
-    const float viscosity = 0.5;
+    const float smoothingRadius = 0.3;
+    const float targetDensity = 30;
+    const float pressureMulti = 1000;
+    const float viscosity = 0.1;
+
+    const box bounds = {10, 0, 10, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
 
     // Change the line below to switch between each version
     int runType = AoS_SORTED;
@@ -164,8 +166,6 @@ int main(int argc, char** argv)
         .pressureMulti = pressureMulti,
         .viscosity = viscosity
     };
-
-    const box bounds = {40, 0, 40, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
 
     // 2 array linked list setup
     float cellSize = smoothingRadius;
@@ -211,7 +211,9 @@ int main(int argc, char** argv)
     
         for (int i = 0; i < numParticles; i++) {
             // Apply gravity and look one step in the future
-            apply_gravity_AoS(i, particleArray, params);
+            // apply_gravity_AoS(i, particleArray, params);
+            particleArray[i].vy += params.gravity * params.timeStep * 0.5;
+            update_position_AoS(i, particleArray, params);
         }
 
         // Create the linklist struct for grids/ cells
@@ -233,6 +235,7 @@ int main(int argc, char** argv)
                     head, next, gridRows, gridCols, cellSize, bounds);
 
             // a = f / density
+            if (particleArray[i].density <= 0) continue;
             float accelX = forceX / particleArray[i].density;
             float accelY = forceY / particleArray[i].density;
             particleArray[i].vx += accelX * timeStep;
@@ -242,7 +245,8 @@ int main(int argc, char** argv)
 
         for (int i = 0; i < numParticles; i++) {
             // Update postions and box collisions
-            update_position_AoS(i, particleArray, params);
+            // update_position_AoS(i, particleArray, params);
+            particleArray[i].vy += params.gravity * params.timeStep * 0.5;
             bounce_particle_AoS(i, particleArray, bounds, params);
         }
 
@@ -555,6 +559,11 @@ void calculate_pressure_sorted(int i, float &force_x, float &force_y, vector<Par
 
     float x1 = particleArray[i].x;
     float y1 = particleArray[i].y;
+
+    // Get current particle velocity
+    float vx1 = particleArray[i].vx;
+    float vy1 = particleArray[i].vy;
+
     float density1 = particleArray[i].density;
     if (density1 <= 0.0) return;
     float pressure1 = density_to_pressure(density1, params);
@@ -583,20 +592,43 @@ void calculate_pressure_sorted(int i, float &force_x, float &force_y, vector<Par
             for (int j = start_idx; j < params.numParticles && particleArray[j].gridHash == neighbourCell; j++) {
                 if (&particleArray[i] == &particleArray[j]) continue;
 
+                // get other particle postion
                 float x2 = particleArray[j].x;
                 float y2 = particleArray[j].y;
-                float dist = distance_from_two_points(x1, y1, x2, y2);
-                if (dist == 0) continue;
 
+                // Get distance/ magnitiude
+                float dist = distance_from_two_points(x1, y1, x2, y2);
+                if (dist == 0) continue; // Either particle is same, or ontop of eachother
+
+                // Get unit vectors
                 float dirX = (x1 - x2) / dist;
                 float dirY = (y1 - y2) / dist;
-                float slope = spikey_kernal_derivative(dist, params.smoothingRadius);
+
+                // Get the slope of the kernal at the distance
+                float slope = spikey_kernal_derivative(dist, params.smoothingRadius); // Grab the gradient of pressure change
+                // Get density and pressure for 2nd particle
                 float density2 = particleArray[j].density;
                 float pressure2 = density_to_pressure(density2, params);
 
+                float gradX = dirX * slope;
+                float gradY = dirY * slope;
+                // Symetric pressure calculation
                 float coeff = -params.mass * (pressure1 / (density1 * density1) + pressure2 / (density2 * density2));
-                force_x += coeff * (dirX * slope);
-                force_y += coeff * (dirY * slope);
+
+                force_x += coeff * gradX;
+                force_y += coeff * gradY;
+
+                // do viscosity things
+                float influence = viscosity_kernal(dist, params.smoothingRadius);
+
+                float vx2 = particleArray[j].vx;
+                float vy2 = particleArray[j].vy;
+                
+                float vx_diff = vx2 - vx1;
+                float vy_diff = vy2 - vy1;
+
+                force_x += params.viscosity * vx_diff * influence;
+                force_y += params.viscosity * vy_diff * influence;
             }
         }
     }
