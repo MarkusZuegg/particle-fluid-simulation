@@ -71,21 +71,11 @@ enum Versions {
 };
 
 // ========================= Func Protos =======================================
-
-// AoS
 void apply_gravity_AoS(int i, vector<Particle> &particleArray, const SimulationParams &params);
 void update_position_AoS(int i, vector<Particle> &particleArray, const SimulationParams &params);
 void bounce_particle_AoS(int i, vector<Particle> &particleArray, const box &bounds, const SimulationParams &params);
-void build_grid_linkedlist_AoS(vector<Particle> &particleArray, vector<int> &head, vector<int> &next,
-        const SimulationParams &params, float cellSize, const box &bounds, int &gridRows, int &gridCols);
-void calculate_denisty_grid_AoS(int i, vector<Particle> &particleArray,
-        const SimulationParams &params, vector<int> &head, vector<int> &next,
-        int gridRows, int gridCols, float cellSize, const box &bounds);
-void calculate_pressure_grid_AoS(int i, float &force_x, float &force_y, vector<Particle> &particleArray,
-        const SimulationParams &params, vector<int> &head, vector<int> &next, int gridRows,
-        int gridCols, float cellSize, const box &bounds);
 
-// AoS with hash + sorting
+// hash + sorting
 void build_grid_sorted(vector<Particle> &particleArray, vector<int> &cellStart, const SimulationParams &params,
     float cellSize, const box &bounds, int &gridRows, int &gridCols);
 void calculate_density_sorted(int i, vector<Particle> &particleArray, const SimulationParams &params,
@@ -131,21 +121,21 @@ int main(int argc, char** argv)
     mircoseconds totalTime{0};
 
     // ============= Simulation params ==================
-    const int maxNumSteps = 4000;
+    const int maxNumSteps = 6000;
     const int saveFrames = 10; // How many frames to save. != 0
-    const int numParticles = 625;
+    const int numParticles = 1024; // 32 grid
     const float timeStep = 0.001;
 
     // gravity!!! HERE
     const float gravity = -9.81;
-    const float elasticity = 0.5;
+    const float elasticity = 0.75;
 
     const int mass = 1; // Particle mass
     const float radius = 0.1; // for particles
 
     const float smoothingRadius = 0.3;
-    const float targetDensity = 30;
-    const float pressureMulti = 1000;
+    const float targetDensity = 20;
+    const float pressureMulti = 900;
     const float viscosity = 0.1;
 
     const box bounds = {10, 0, 10, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
@@ -211,19 +201,18 @@ int main(int argc, char** argv)
     
         for (int i = 0; i < numParticles; i++) {
             // Apply gravity and look one step in the future
-            // apply_gravity_AoS(i, particleArray, params);
             particleArray[i].vy += params.gravity * params.timeStep * 0.5;
             update_position_AoS(i, particleArray, params);
         }
 
         // Create the linklist struct for grids/ cells
-        build_grid_linkedlist_AoS(particleArray, head, next, params, cellSize, bounds,
+        build_grid_sorted(particleArray, cellStart, params, cellSize, bounds,
                 gridRows, gridCols);
 
         for (int i = 0; i < numParticles; i++) {
             // Calc density
-            calculate_denisty_grid_AoS(i, particleArray, params, head,
-                    next, gridRows, gridCols, cellSize, bounds);
+            calculate_density_sorted(i, particleArray, params, cellStart, gridRows,
+                    gridCols, cellSize, bounds);
         }
 
         for (int i = 0; i < numParticles; i++) {
@@ -231,8 +220,8 @@ int main(int argc, char** argv)
             float forceX = 0.0;
             float forceY = 0.0;
 
-            calculate_pressure_grid_AoS(i, forceX, forceY, particleArray, params,
-                    head, next, gridRows, gridCols, cellSize, bounds);
+            calculate_pressure_sorted(i, forceX, forceY, particleArray, params, cellStart,
+                    gridRows, gridCols, cellSize, bounds);
 
             // a = f / density
             if (particleArray[i].density <= 0) continue;
@@ -316,155 +305,6 @@ void bounce_particle_AoS(int i, vector<Particle> &particleArray, const box &boun
     if (particleArray[i].y + params.radius > bounds.ymax) {
         particleArray[i].y = bounds.ymax - params.radius;
         particleArray[i].vy *= -1 * params.elasticity;
-    }
-}
-
-void build_grid_linkedlist_AoS(vector<Particle> &particleArray, vector<int> &head, vector<int> &next,
-        const SimulationParams &params, float cellSize, const box &bounds, int &gridRows, int &gridCols)
-{
-    float width = bounds.xmax - bounds.xmin;
-    float height = bounds.ymax - bounds.ymin;
-    gridRows = std::max(1, (int)ceil(height / cellSize));
-    gridCols = std::max(1, (int)ceil(width / cellSize));
-
-    int numCells = gridRows * gridCols;
-    // Reset head and next vector arrays
-    head.assign(numCells, -1);
-    next.assign(params.numParticles, -1);
-
-    // Insert the particles
-    for (int i = 0; i < params.numParticles; i++) {
-        float x = particleArray[i].x;
-        float y = particleArray[i].y;
-
-        int cellX = (int)floor((x - bounds.xmin) / cellSize);
-        int cellY = (int)floor((y - bounds.ymin) / cellSize);
-        cellX = std::clamp(cellX, 0, gridCols - 1);
-        cellY = std::clamp(cellY, 0, gridRows - 1);
-
-        int cellIndex = cellX + (cellY * gridCols);
-        // Swap head with new particle (do linkedlist things)
-        next[i] = head[cellIndex];
-        head[cellIndex] = i;
-    }
-}
-
-void calculate_denisty_grid_AoS(int i, vector<Particle> &particleArray,
-        const SimulationParams &params, vector<int> &head, vector<int> &next,
-        int gridRows, int gridCols, float cellSize, const box &bounds)
-{
-    float density = 0;
-
-    float x1 = particleArray[i].x;
-    float y1 = particleArray[i].y;
-
-    // Get first particle cell position
-    int cellX = (int)floor((x1 - bounds.xmin) / cellSize);
-    int cellY = (int)floor((y1 - bounds.ymin) / cellSize);
-    cellX = std::clamp(cellX, 0, gridCols - 1);
-    cellY = std::clamp(cellY, 0, gridRows - 1);
-
-    // Go through a 3x3 of cells around the particle cell
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            int newCellX = cellX + dx;
-            int newCellY = cellY + dy;
-            if (newCellX < 0 || newCellX >= gridCols) continue; // check x is inbounds
-            if (newCellY < 0 || newCellY >= gridRows) continue; // check y
-
-            int neighbourCell = newCellX + (newCellY * gridCols);
-            // Now loop through all particles in this cell
-            for (int j = head[neighbourCell]; j != -1; j = next[j]) {
-                float x2 = particleArray[j].x;
-                float y2 = particleArray[j].y;
-
-                float dist = distance_from_two_points(x1, y1, x2, y2);
-                float influence = ploy6_kernal(dist, params.smoothingRadius); // Kernal for density
-                density += params.mass * influence;
-            }
-        }
-    }
-    particleArray[i].density = density;
-}
-
-void calculate_pressure_grid_AoS(int i, float &force_x, float &force_y, vector<Particle> &particleArray,
-        const SimulationParams &params, vector<int> &head, vector<int> &next, int gridRows,
-        int gridCols, float cellSize, const box &bounds)
-{
-    force_x = 0.0;
-    force_y = 0.0;
-
-    // Get current particle position
-    float x1 = particleArray[i].x;
-    float y1 = particleArray[i].y;
-
-    // Get current particle velocity
-    float vx1 = particleArray[i].vx;
-    float vy1 = particleArray[i].vy;
-
-    // Get density and pressure for 1st particle
-    float density1 = particleArray[i].density;
-    float pressure1 = density_to_pressure(density1, params);
-    if (density1 <= 0.0) return;
-
-    // Get first particle cell position
-    int cellX = (int)floor((x1 - bounds.xmin) / cellSize);
-    int cellY = (int)floor((y1 - bounds.ymin) / cellSize);
-    cellX = std::clamp(cellX, 0, gridCols - 1);
-    cellY = std::clamp(cellY, 0, gridRows - 1);
-
-    // Go through a 3x3 of cells around the particle cell
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            int newCellX = cellX + dx;
-            int newCellY = cellY + dy;
-            if (newCellX < 0 || newCellX >= gridCols) continue; // check x is inbounds
-            if (newCellY < 0 || newCellY >= gridRows) continue; // check y
-
-            int neighbourCell = newCellX + (newCellY * gridCols);
-            // Now loop through all particles in this cell
-            for (int j = head[neighbourCell]; j != -1; j = next[j]) {
-                if (j == i) continue;
-
-                // get other particle postion
-                float x2 = particleArray[j].x;
-                float y2 = particleArray[j].y;
-
-                // Get distance/ magnitiude
-                float dist = distance_from_two_points(x1, y1, x2, y2);
-                if (dist == 0) continue; // Either particle is same, or ontop of eachother
-
-                // Get unit vectors
-                float dirX = (x1 - x2) / dist;
-                float dirY = (y1 - y2) / dist;
-
-                // Get the slope of the kernal at the distance
-                float slope = spikey_kernal_derivative(dist, params.smoothingRadius); // Grab the gradient of pressure change
-                // Get density and pressure for 2nd particle
-                float density2 = particleArray[j].density;
-                float pressure2 = density_to_pressure(density2, params);
-
-                float gradX = dirX * slope;
-                float gradY = dirY * slope;
-                // Symetric pressure calculation
-                float coeff = -params.mass * (pressure1 / (density1 * density1) + pressure2 / (density2 * density2));
-
-                force_x += coeff * gradX;
-                force_y += coeff * gradY;
-
-                // do viscosity things
-                float influence = viscosity_kernal(dist, params.smoothingRadius);
-
-                float vx2 = particleArray[j].vx;
-                float vy2 = particleArray[j].vy;
-                
-                float vx_diff = vx2 - vx1;
-                float vy_diff = vy2 - vy1;
-
-                force_x += params.viscosity * vx_diff * influence;
-                force_y += params.viscosity * vy_diff * influence;
-            }
-        }
     }
 }
 
@@ -877,7 +717,7 @@ void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles
     // Particle Data
     ret = gsd_write_chunk(&handle, "particles/N", GSD_TYPE_UINT32, 1, 1, 0, &numParticles);
     ret = gsd_write_chunk(&handle, "particles/position", GSD_TYPE_FLOAT, numParticles, 3, 0, pos_float.data());
-    ret = gsd_write_chunk(&handle, "particles/velocity", GSD_TYPE_FLOAT, numParticles, 3, 0, vel_float.data());
+    // ret = gsd_write_chunk(&handle, "particles/velocity", GSD_TYPE_FLOAT, numParticles, 3, 0, vel_float.data());
     ret = gsd_write_chunk(&handle, "particles/diameter", GSD_TYPE_FLOAT, numParticles, 1, 0, diameters.data());
     // Particle ID
     vector<uint32_t> typeids(numParticles, 0);
