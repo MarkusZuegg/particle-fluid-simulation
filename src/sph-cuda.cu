@@ -133,10 +133,13 @@ struct BuildGridHashFunctor
         : params(params), bounds(b), cellSize(cs), gridRows(gr), gridCols(gc) {}
 
     __device__ void operator()(Particle& p) const {
-        int cellX = (int)floor((p.x - bounds.xmin) / cellSize);
-        int cellY = (int)floor((p.y - bounds.ymin) / cellSize);
-        cellX = std::clamp(cellX, 0, gridCols - 1);
-        cellY = std::clamp(cellY, 0, gridRows - 1);
+        int cellX = (int)floorf((p.x - bounds.xmin) / cellSize);
+        int cellY = (int)floorf((p.y - bounds.ymin) / cellSize);
+        // clamp with out using std::clamp
+        if (cellX < 0) cellX = 0;
+        if (cellX >= gridCols) cellX = gridCols - 1;
+        if (cellY < 0) cellY = 0;
+        if (cellY >= gridRows) cellY = gridRows - 1;
 
         p.gridHash = cellX + (cellY * gridCols);
     }
@@ -177,10 +180,13 @@ struct CalcDensityFunctor
         float x1 = particleArray[i].x;
         float y1 = particleArray[i].y;
 
-        int cellX = static_cast<int>(floor((x1 - bounds.xmin) / cellSize));
-        int cellY = static_cast<int>(floor((y1 - bounds.ymin) / cellSize));
-        cellX = std::clamp(cellX, 0, gridCols - 1);
-        cellY = std::clamp(cellY, 0, gridRows - 1);
+        int cellX = static_cast<int>(floorf((x1 - bounds.xmin) / cellSize));
+        int cellY = static_cast<int>(floorf((y1 - bounds.ymin) / cellSize));
+        // clamp with out using std::clamp
+        if (cellX < 0) cellX = 0;
+        if (cellX >= gridCols) cellX = gridCols - 1;
+        if (cellY < 0) cellY = 0;
+        if (cellY >= gridRows) cellY = gridRows - 1;
         
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
@@ -248,10 +254,13 @@ struct CalcPressureFunctor
         float pressure1 = density_to_pressure(density1, params);
 
         // get current cell pos
-        int cellX = (int)floor((x1 - bounds.xmin) / cellSize);
-        int cellY = (int)floor((y1 - bounds.ymin) / cellSize);
-        cellX = std::clamp(cellX, 0, gridCols - 1);
-        cellY = std::clamp(cellY, 0, gridRows - 1);
+        int cellX = (int)floorf((x1 - bounds.xmin) / cellSize);
+        int cellY = (int)floorf((y1 - bounds.ymin) / cellSize);
+        // clamp with out using std::clamp
+        if (cellX < 0) cellX = 0;
+        if (cellX >= gridCols) cellX = gridCols - 1;
+        if (cellY < 0) cellY = 0;
+        if (cellY >= gridRows) cellY = gridRows - 1;
 
         // loop through surounding cells
         for (int dy = -1; dy <= 1; dy++) {
@@ -311,8 +320,8 @@ struct CalcPressureFunctor
                 }
             }
         }
-        particles[i].vx += (force_x / density1) * params.timeStep;
-        particles[i].vy += (force_y / density1) * params.timeStep;
+        particleArray[i].vx += (force_x / density1) * params.timeStep;
+        particleArray[i].vy += (force_y / density1) * params.timeStep;
     }
 };
 
@@ -443,16 +452,16 @@ int main(int argc, char** argv)
         auto start = timer::now();
     
         // Apply half vy step as per leapfrog
-        thurst::for_each(d_particleArray.begin(), d_particleArray.end(),
+        thrust::for_each(d_particleArray.begin(), d_particleArray.end(),
             ApplyHalfGravityFunctor(params));
 
         // Update position
-        thurst::for_each(d_particleArray.begin(), d_particleArray.end(),
+        thrust::for_each(d_particleArray.begin(), d_particleArray.end(),
             UpdateParticleFunctor(params));
 
         // Build grid using thurt for each
-        thurst::for_each(d_particleArray.begin(), d_particleArray.end(),
-            BuildGridHashFunctor(params, bounds, cellSize, gridRows, gridCols))
+        thrust::for_each(d_particleArray.begin(), d_particleArray.end(),
+            BuildGridHashFunctor(params, bounds, cellSize, gridRows, gridCols));
 
         // Sort using thurst :)
         thrust::sort(d_particleArray.begin(), d_particleArray.end(), ParticleHashComparator());
@@ -467,19 +476,19 @@ int main(int argc, char** argv)
             params.numParticles);
         
         // Parallel calculate denisty
-        thurst::for_each(thurst::make_counting_iterator(0), thurst::make_counting_iterator(numParticles),
+        thrust::for_each(thurst::make_counting_iterator(0), thurst::make_counting_iterator(numParticles),
             CalcDensityFunctor(params, bounds, cellSize, gridRows, gridCols, d_cellStart, d_particleArray));
 
         // Parallel calculate pressure forces
-        thurst::for_each(thurst::make_counting_iterator(0), thurst::make_counting_iterator(numParticles),
+        thrust::for_each(thurst::make_counting_iterator(0), thurst::make_counting_iterator(numParticles),
             CalcPressureFunctor(params, bounds, cellSize, gridRows, gridCols, d_cellStart, d_particleArray));
 
         // Apply other half of leapfrog
-        thurst::for_each(d_particleArray.begin(), d_particleArray.end(),
+        thrust::for_each(d_particleArray.begin(), d_particleArray.end(),
             ApplyHalfGravityFunctor(params));
 
         // Bounce the particles
-        thurst::for_each(d_particleArray.begin(), d_particleArray.end(),
+        thrust::for_each(d_particleArray.begin(), d_particleArray.end(),
             BounceParticleFunctor(params, bounds));
 
         // Stop execution time (dont count file saving)
@@ -534,7 +543,7 @@ __device__ inline float ploy6_kernal(float dist, float radius)
     float radius2 = radius * radius;
     float distance2 = dist * dist;
     float influence = radius2 - distance2;
-    float norm = 4.0 / (M_PI * pow(radius, 8));
+    float norm = 4.0 / (M_PI * powf(radius, 8));
     return norm * (influence * influence * influence);
 }
 
@@ -542,7 +551,7 @@ __device__ inline float ploy6_kernal(float dist, float radius)
 __device__ inline float spikey_kernal(float dist, float radius)
 {
     if (dist >= radius) return 0;
-    float norm = 10.0 / (M_PI * pow(radius, 5));
+    float norm = 10.0 / (M_PI * powf(radius, 5));
     float influenece = radius - dist;
     return norm * (influenece * influenece * influenece);
 }
@@ -551,7 +560,7 @@ __device__ inline float spikey_kernal(float dist, float radius)
 __device__ inline float spikey_kernal_derivative(float dist, float radius)
 {
     if (dist >= radius || dist <= 0) return 0;
-    float norm = 10.0 / (M_PI * pow(radius, 5));
+    float norm = 10.0 / (M_PI * powf(radius, 5));
     float influence = radius - dist;
     return -3.0 * norm * (influence * influence);
 }
@@ -560,7 +569,7 @@ __device__ inline float spikey_kernal_derivative(float dist, float radius)
 __device__ inline float viscosity_kernal(float dist, float radius)
 {
     if (dist >= radius) return 0;
-    float norm = 45.0 / (M_PI * pow(radius, 6));
+    float norm = 45.0 / (M_PI * powf(radius, 6));
     float influence = radius - dist;
     return norm * influence;
 }
@@ -584,7 +593,7 @@ __device__ inline float distance_from_two_points(float x1, float y1, float x2, f
     float square_diff_x = (x2 - x1) * (x2 - x1);
     float square_diff_y = (y2 - y1) * (y2 - y1);
     float sum = square_diff_x + square_diff_y;
-    float value = sqrt(sum);
+    float value = sqrtf(sum);
     return value;
 }
 
@@ -635,8 +644,8 @@ void init_grid_particle_pos_AoS(thrust::host_vector<Particle> &particleArray,
         exit(1);
     }
 
-    int cols_fittable = static_cast<int>(floor(spawnWidth / spacing)) + 1;
-    int rows_fittable = static_cast<int>(floor(spawnHeight / spacing)) + 1;
+    int cols_fittable = static_cast<int>(floorf(spawnWidth / spacing)) + 1;
+    int rows_fittable = static_cast<int>(floorf(spawnHeight / spacing)) + 1;
     int max_particles = cols_fittable * rows_fittable;
 
     if (numParticles > max_particles) {
