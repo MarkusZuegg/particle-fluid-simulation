@@ -1,6 +1,7 @@
 /.vscode
 COSC3500_Milestone.pdf
-src/sph
+src/sph_cpu
+src/sph_gpu
 src/logs/
 src/gmon.out
 src/analysis.txt
