@@ -18,7 +18,6 @@
 #include <thrust/sort.h>
 #include <thrust/fill.h>
 #include <thrust/iterator/counting_iterator.h>
-#include <thrust/raw_pointer_cast.h>
 
 using std::vector;
 using timer = std::chrono::high_resolution_clock;
@@ -207,7 +206,6 @@ struct CalcDensityFunctor
             }
         }
         particleArray[i].density = density;
-
     }
 };
 
@@ -400,16 +398,16 @@ int main(int argc, char** argv)
 
     // Set up struct to hold params
     const SimulationParams params = {
-        .numParticles = numParticles,
-        .timeStep = timeStep,
-        .gravity = gravity,
-        .elasticity = elasticity,
-        .mass = mass,
-        .radius = radius,
-        .smoothingRadius = smoothingRadius,
-        .targetDensity = targetDensity,
-        .pressureMulti = pressureMulti,
-        .viscosity = viscosity
+        numParticles,
+        timeStep,
+        gravity,
+        elasticity,
+        mass,
+        radius,
+        smoothingRadius,
+        targetDensity,
+        pressureMulti,
+        viscosity
     };
 
     // 2 array linked list setup
