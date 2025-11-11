@@ -103,8 +103,6 @@ void init_grid_particle_pos_AoS(vector<Particle> &particleArray,
         const box &bounds, const SimulationParams &params);
 
 // File saving
-std::ofstream open_csv_file(const std::string& filename, const SimulationParams &params);
-void write_particle_positions_to_csv_AoS(std::ofstream &file, const vector<Particle> &particleArray, const int step);
 void save_to_json(const std::string &filename, const SimulationParams &params, const box &bounds);
 void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles,
         const box &bounds, const vector<float> &positions, const vector<float> &velocities,
@@ -399,14 +397,6 @@ int main(int argc, char** argv)
     std::string fileNameCsv = "logs/x" + std::string(argv[0]) + ".csv";
     std::string fileNameJson = "logs/x" + std::string(argv[0]) + ".json";
     std::string fileNameGsd = "logs/x" + std::string(argv[0]) + ".gsd";
-    
-    // ========================= CSV saving ===============================
-    std::ofstream csvFile = open_csv_file(fileNameCsv, params);
-    save_to_json(fileNameJson, params, bounds);
-
-    // Set the amount of digits saved from float
-    int sigfigs = 4;
-    csvFile << std::fixed << std::setprecision(sigfigs);
 
     // =========================== GSD ====================================
     gsd_handle handle;
@@ -484,12 +474,10 @@ int main(int argc, char** argv)
             write_frame_to_gsd(handle, step, numParticles, bounds, positions, velocities, params);
         }
     }
-    
-    csvFile.close();
+
     gsd_close(&handle);
     std::cout << "Total time(minus file saving) in 'us': " << totalTime.count() << std::endl;
     std::cout << "End of simulation" << std::endl;
-
     return 0;
 }
 
@@ -679,24 +667,6 @@ void init_grid_particle_pos_AoS(vector<Particle> &particleArray,
             
             currentParticle++;
         }
-    }
-}
-
-// ========================== csv saving =======================================
-
-std::ofstream open_csv_file(const std::string& filename, const SimulationParams &params)
-{
-    std::ofstream file(filename);
-    if (file.is_open()) {
-        file << "step,";
-        for (int i = 0; i < params.numParticles; i++) {
-            file << "x" << i << ",y" << i << ","; // adds x1,y1,x2,y2 etc
-        }
-        file << '\n';
-        return file;
-    } else {
-        std::cerr << "Unable to open file: " << filename << std::endl;
-        return file;
     }
 }
 
