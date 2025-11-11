@@ -500,13 +500,177 @@ struct BuildGridHashFunctor
     const float cellSize;
     const int gridRows;
     const int gridCols;
+
     __host__ BuildGridHashFunctor(const SimulationParams& params, const box& b, float cs, int gr, int gc)
         : params(params), bounds(b), cellSize(cs), gridRows(gr), gridCols(gc) {}
+
     __device__ void operator()(Particle& p) const {
+        int cellX = (int)floor((p.x - bounds.xmin) / cellSize);
+        int cellY = (int)floor((p.y - bounds.ymin) / cellSize);
+        cellX = std::clamp(cellX, 0, gridCols - 1);
+        cellY = std::clamp(cellY, 0, gridRows - 1);
+
+        p.gridHash = cellX + (cellY * gridCols);
+    }
+};
+
+struct ParticleHashComparator
+{
+    __host__ __device__ bool operator()(const Particle& a, const Particle& b) const {
+        return a.gridHash < b.gridHash;
+    }
+};
+
+struct CalcDensityFunctor
+{
+    const SimulationParams params;
+    const box bounds;
+    const float cellSize;
+    const int gridRows;
+    const int gridCols;
+    const int* cellStart;
+    Particle* particleArray;
+
+    __host__ CalcDensityFunctor(const SimulationParams& params, const box& b, float cs, int gr, int gc,
+        const int* cs_ptr, Particle* p_ptr)
+        : params(params), bounds(b), cellSize(cs), gridCols(gc), gridRows(gr), cellStart(cs_ptr), 
+        particleArray(p_ptr) {}
+
+    __device__ void operator()(int i) const {
+        float density = 0.0;
+        float x1 = particleArray[i].x;
+        float y1 = particleArray[i].y;
+
+        int cellX = static_cast<int>(floor((x1 - bounds.xmin) / cellSize));
+        int cellY = static_cast<int>(floor((y1 - bounds.ymin) / cellSize));
+        cellX = std::clamp(cellX, 0, gridCols - 1);
+        cellY = std::clamp(cellY, 0, gridRows - 1);
+        
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                int newCellX = cellX + dx;
+                int newCellY = cellY + dy;
+                if (newCellX < 0 || newCellX >= gridCols) continue;
+                if (newCellY < 0 || newCellY >= gridRows) continue;
+
+                int neighbourCell = newCellX + (newCellY * gridCols);
+                int start_idx = cellStart[neighbourCell];
+
+                // If cell is empty
+                if (start_idx == -1) continue;
+
+                // Loop untill particle's hash != current cell
+                for (int j = start_idx; j < params.numParticles && particleArray[j].gridHash == neighbourCell; j++) {
+                    float x2 = particleArray[j].x;
+                    float y2 = particleArray[j].y;
+                    float dist = distance_from_two_points(x1, y1, x2, y2);
+                    float influence = ploy6_kernal(dist, params.smoothingRadius);
+                    density += params.mass * influence;
+                }
+            }
+        }
+        particleArray[i].density = density;
 
     }
 };
 
+struct CalcPressureFunctor
+{
+    const SimulationParams params;
+    const box bounds;
+    const float cellSize;
+    const int gridRows;
+    const int gridCols;
+    const int* cellStart;
+    Particle* particleArray;
+
+    __host__ CalcPressureFunctor(const SimulationParams& params, const box& b, float cs, int gr, int gc,
+        const int* cs_ptr, Particle* p_ptr)
+        : params(params), bounds(b), cellSize(cs), gridCols(gc), gridRows(gr), cellStart(cs_ptr), 
+        particleArray(p_ptr) {}
+
+    __device__ void operator()(int i) const {
+        float force_x = 0.0;
+        float force_y = 0.0;
+
+        float x1 = particleArray[i].x;
+        float y1 = particleArray[i].y;
+
+        // Get current particle velocity
+        float vx1 = particleArray[i].vx;
+        float vy1 = particleArray[i].vy;
+
+        float density1 = particleArray[i].density;
+        if (density1 <= 0.0) return;
+        float pressure1 = density_to_pressure(density1, params);
+
+        // get current cell pos
+        int cellX = (int)floor((x1 - bounds.xmin) / cellSize);
+        int cellY = (int)floor((y1 - bounds.ymin) / cellSize);
+        cellX = std::clamp(cellX, 0, gridCols - 1);
+        cellY = std::clamp(cellY, 0, gridRows - 1);
+
+        // loop through surounding cells
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                int newCellX = cellX + dx;
+                int newCellY = cellY + dy;
+                if (newCellX < 0 || newCellX >= gridCols) continue;
+                if (newCellY < 0 || newCellY >= gridRows) continue;
+
+                int neighbourCell = newCellX + (newCellY * gridCols);
+                int start_idx = cellStart[neighbourCell];
+
+                // If cell is empty
+                if (start_idx == -1) continue;
+
+                // Loop untill particle's hash != current cell
+                for (int j = start_idx; j < params.numParticles && particleArray[j].gridHash == neighbourCell; j++) {
+                    if (&particleArray[i] == &particleArray[j]) continue;
+
+                    // get other particle postion
+                    float x2 = particleArray[j].x;
+                    float y2 = particleArray[j].y;
+
+                    // Get distance/ magnitiude
+                    float dist = distance_from_two_points(x1, y1, x2, y2);
+                    if (dist == 0) continue; // Either particle is same, or ontop of eachother
+
+                    // Get unit vectors
+                    float dirX = (x1 - x2) / dist;
+                    float dirY = (y1 - y2) / dist;
+
+                    // Get the slope of the kernal at the distance
+                    float slope = spikey_kernal_derivative(dist, params.smoothingRadius); // Grab the gradient of pressure change
+                    // Get density and pressure for 2nd particle
+                    float density2 = particleArray[j].density;
+                    float pressure2 = density_to_pressure(density2, params);
+
+                    float gradX = dirX * slope;
+                    float gradY = dirY * slope;
+                    // Symetric pressure calculation
+                    float coeff = -params.mass * (pressure1 / (density1 * density1) + pressure2 / (density2 * density2));
+
+                    force_x += coeff * gradX;
+                    force_y += coeff * gradY;
+
+                    // do viscosity things
+                    float influence = viscosity_kernal(dist, params.smoothingRadius);
+
+                    float vx2 = particleArray[j].vx;
+                    float vy2 = particleArray[j].vy;
+                    
+                    float vx_diff = vx2 - vx1;
+                    float vy_diff = vy2 - vy1;
+
+                    force_x += params.viscosity * vx_diff * influence;
+                    force_y += params.viscosity * vy_diff * influence;
+                }
+            }
+        }
+    }
+
+};
 
 // =================== Kernals ====================
 
