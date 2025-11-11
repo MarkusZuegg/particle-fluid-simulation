@@ -468,20 +468,23 @@ int main(int argc, char** argv)
 
         // Create cellStart array
         thrust::fill(d_cellStart.begin(), d_cellStart.end(), -1);
+    
+        // Get pointers to the data
+        Particle* d_particleArray_ptr = thrust::raw_pointer_cast(d_particleArray.data());
+        int* d_cellStart_ptr = thrust::raw_pointer_cast(d_cellStart.data());
+
         const int threadsPerBlock = 256;
         const int numBlocks = (params.numParticles + threadsPerBlock - 1) / threadsPerBlock;
         find_cell_start_kernal<<<numBlocks, threadsPerBlock>>>(
-            thrust::raw_pointer_cast(d_particleArray.data()),
-            thrust::raw_pointer_cast(d_cellStart.data()),
-            params.numParticles);
+            d_particleArray_ptr, d_cellStart_ptr, params.numParticles);
         
         // Parallel calculate denisty
         thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
-            CalcDensityFunctor(params, bounds, cellSize, gridRows, gridCols, d_cellStart, d_particleArray));
+            CalcDensityFunctor(params, bounds, cellSize, gridRows, gridCols, d_cellStart_ptr, d_particleArray_ptr));
 
         // Parallel calculate pressure forces
         thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
-            CalcPressureFunctor(params, bounds, cellSize, gridRows, gridCols, d_cellStart, d_particleArray));
+            CalcPressureFunctor(params, bounds, cellSize, gridRows, gridCols, d_cellStart_ptr, d_particleArray_ptr));
 
         // Apply other half of leapfrog
         thrust::for_each(d_particleArray.begin(), d_particleArray.end(),
