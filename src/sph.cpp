@@ -143,16 +143,16 @@ int main(int argc, char** argv)
 
     // Set up struct to hold params
     const SimulationParams params = {
-        .numParticles = numParticles,
-        .timeStep = timeStep,
-        .gravity = gravity,
-        .elasticity = elasticity,
-        .mass = mass,
-        .radius = radius,
-        .smoothingRadius = smoothingRadius,
-        .targetDensity = targetDensity,
-        .pressureMulti = pressureMulti,
-        .viscosity = viscosity
+        numParticles,
+        timeStep,
+        gravity,
+        elasticity,
+        mass,
+        radius,
+        smoothingRadius,
+        targetDensity,
+        pressureMulti,
+        viscosity
     };
 
     // 2 array linked list setup
@@ -314,8 +314,8 @@ void build_grid_sorted(vector<Particle> &particleArray, vector<int> &cellStart, 
         float x = particleArray[i].x;
         float y = particleArray[i].y;
 
-        int cellX = (int)floor((x - bounds.xmin) / cellSize);
-        int cellY = (int)floor((y - bounds.ymin) / cellSize);
+        int cellX = (int)floorf((x - bounds.xmin) / cellSize);
+        int cellY = (int)floorf((y - bounds.ymin) / cellSize);
         cellX = std::clamp(cellX, 0, gridCols - 1);
         cellY = std::clamp(cellY, 0, gridRows - 1);
 
@@ -346,8 +346,8 @@ void calculate_density_sorted(int i, vector<Particle> &particleArray, const Simu
     float y1 = particleArray[i].y;
 
     // get current cell pos
-    int cellX = (int)floor((x1 - bounds.xmin) / cellSize);
-    int cellY = (int)floor((y1 - bounds.ymin) / cellSize);
+    int cellX = (int)floorf((x1 - bounds.xmin) / cellSize);
+    int cellY = (int)floorf((y1 - bounds.ymin) / cellSize);
     cellX = std::clamp(cellX, 0, gridCols - 1);
     cellY = std::clamp(cellY, 0, gridRows - 1);
 
@@ -397,8 +397,8 @@ void calculate_pressure_sorted(int i, float &force_x, float &force_y, vector<Par
     float pressure1 = density_to_pressure(density1, params);
 
     // get current cell pos
-    int cellX = (int)floor((x1 - bounds.xmin) / cellSize);
-    int cellY = (int)floor((y1 - bounds.ymin) / cellSize);
+    int cellX = (int)floorf((x1 - bounds.xmin) / cellSize);
+    int cellY = (int)floorf((y1 - bounds.ymin) / cellSize);
     cellX = std::clamp(cellX, 0, gridCols - 1);
     cellY = std::clamp(cellY, 0, gridRows - 1);
 
@@ -471,7 +471,7 @@ inline float ploy6_kernal(float dist, float radius)
     float radius2 = radius * radius;
     float distance2 = dist * dist;
     float influence = radius2 - distance2;
-    float norm = 4.0 / (M_PI * pow(radius, 8));
+    float norm = 4.0 / (M_PI * powf(radius, 8));
     return norm * (influence * influence * influence);
 }
 
@@ -479,7 +479,7 @@ inline float ploy6_kernal(float dist, float radius)
 inline float spikey_kernal(float dist, float radius)
 {
     if (dist >= radius) return 0;
-    float norm = 10.0 / (M_PI * pow(radius, 5));
+    float norm = 10.0 / (M_PI * powf(radius, 5));
     float influenece = radius - dist;
     return norm * (influenece * influenece * influenece);
 }
@@ -488,7 +488,7 @@ inline float spikey_kernal(float dist, float radius)
 inline float spikey_kernal_derivative(float dist, float radius)
 {
     if (dist >= radius || dist <= 0) return 0;
-    float norm = 10.0 / (M_PI * pow(radius, 5));
+    float norm = 10.0 / (M_PI * powf(radius, 5));
     float influence = radius - dist;
     return -3.0 * norm * (influence * influence);
 }
@@ -497,7 +497,7 @@ inline float spikey_kernal_derivative(float dist, float radius)
 inline float viscosity_kernal(float dist, float radius)
 {
     if (dist >= radius) return 0;
-    float norm = 45.0 / (M_PI * pow(radius, 6));
+    float norm = 45.0 / (M_PI * powf(radius, 6));
     float influence = radius - dist;
     return norm * influence;
 }
@@ -564,8 +564,8 @@ void init_grid_particle_pos_AoS(vector<Particle> &particleArray,
         exit(1);
     }
 
-    int cols_fittable = static_cast<int>(floor(spawnWidth / spacing)) + 1;
-    int rows_fittable = static_cast<int>(floor(spawnHeight / spacing)) + 1;
+    int cols_fittable = static_cast<int>(floorf(spawnWidth / spacing)) + 1;
+    int rows_fittable = static_cast<int>(floorf(spawnHeight / spacing)) + 1;
     int max_particles = cols_fittable * rows_fittable;
 
     if (numParticles > max_particles) {
