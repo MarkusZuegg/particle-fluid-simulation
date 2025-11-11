@@ -79,12 +79,8 @@ enum Versions {
 };
 
 // ========================= Func Protos =======================================
-// hash + sorting
-void build_grid_sorted(vector<Particle> &particleArray, vector<int> &cellStart, const SimulationParams &params,
-    float cellSize, const box &bounds, int &gridRows, int &gridCols);
 
-// Kernals
-//! Made do cuda
+__global__ void find_cell_start_kernal(const Particle* particleArray, int* cellStart, int numParticles);
 __device__ inline float ploy6_kernal(float dist, float radius);
 __device__ inline float spikey_kernal(float dist, float radius);
 __device__ inline float spikey_kernal_derivative(float dist, float radius);
@@ -99,7 +95,8 @@ int get_y_index(int i);
 // Inits
 void init_random_particle_pos_AoS(vector<Particle> &particleArray,
         const box &bounds, const SimulationParams &params);
-void init_grid_particle_pos_AoS(vector<Particle> &particleArray,
+// Adjusted for thrust vector
+void init_grid_particle_pos_AoS(thrust::host_vector<Particle> &particleArray,
         const box &bounds, const SimulationParams &params);
 
 // File saving
@@ -108,7 +105,7 @@ void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles
         const box &bounds, const vector<float> &positions, const vector<float> &velocities,
         const SimulationParams &params);
 
-//TODO ================== Thrust Functors =============
+// ===================== Thrust Functors =======================
 
 struct ApplyHalfGravityFunctor
 {
@@ -119,6 +116,12 @@ struct ApplyHalfGravityFunctor
     }
 };
 
+// Given a particle calculate its grid hash
+// @param SimulationParams params
+// @param Box bounds
+// @param float cellSize
+// @param int gridRows
+// @param int gridCols
 struct BuildGridHashFunctor
 {
     const SimulationParams params;
@@ -147,6 +150,14 @@ struct ParticleHashComparator
     }
 };
 
+// Calculate density of a particle
+// @param SimulationParams params
+// @param Box bounds
+// @param float cellSize
+// @param int gridRows
+// @param int gridCols
+// @param int* cellStart
+// @param Particle* particleArray
 struct CalcDensityFunctor
 {
     const SimulationParams params;
@@ -200,6 +211,14 @@ struct CalcDensityFunctor
     }
 };
 
+// Calculate pressure forces on a particle
+// @param SimulationParams params
+// @param Box bounds
+// @param float cellSize
+// @param int gridRows
+// @param int gridCols
+// @param int* cellStart
+// @param Particle* particleArray
 struct CalcPressureFunctor
 {
     const SimulationParams params;
@@ -294,9 +313,14 @@ struct CalcPressureFunctor
                 }
             }
         }
+        particles[i].vx += (force_x / density1) * params.timeStep;
+        particles[i].vy += (force_y / density1) * params.timeStep;
     }
 };
 
+// Bounces particles back into box if needed
+// @param SimulationParams params
+// @param Box bounds 
 struct BounceParticleFunctor
 {
     const SimulationParams params;
@@ -326,12 +350,13 @@ struct BounceParticleFunctor
     }
 };
 
+// Updates the particles postion due to velocity
+// @param SimulationParams params
 struct UpdateParticleFunctor
 {
     const SimulationParams params;
-    const box bounds;
 
-    __host__ UpdateParticleFunctor(const SimulationParams& params, const box& b) : params(params), bounds(b) {}
+    __host__ UpdateParticleFunctor(const SimulationParams& params) : params(params) {}
 
     __device__ void operator()(Particle& p) const {
         p.x += p.vx * params.timeStep;
@@ -389,8 +414,9 @@ int main(int argc, char** argv)
 
     // 2 array linked list setup
     float cellSize = smoothingRadius;
-    int gridRows = 0;
-    int gridCols = 0;
+    int gridRows = std::max(1, (int)ceil((bounds.ymax - bounds.ymin) / cellSize));
+    int gridCols = std::max(1, (int)ceil((bounds.xmax - bounds.xmin) / cellSize));
+    int numCells = gridRows * gridCols;
     vector<int> cellStart;
 
     // ========================== File Names ==============================
@@ -408,68 +434,70 @@ int main(int argc, char** argv)
     }
 
     // ===================== Simulation loop ==================================
-    // LinkedList grid + AoS approach
-    vector<Particle> particleArray(numParticles);
+    thrust::host_vector<Particle> h_particleArray(numParticles);
+    init_grid_particle_pos_AoS(h_particleArray, bounds, params);
 
-    // init_random_particle_pos_AoS(particleArray, bounds, params); // random starting pos
-    init_grid_particle_pos_AoS(particleArray, bounds, params);
+    thrust::device_vector<Particle> d_particleArray = h_particleArray;
+    thrust::device_vector<int> d_cellStart(numCells);
+
     for (int step = 0; step < maxNumSteps; step++) {
         // Time execution
         auto start = timer::now();
     
-        for (int i = 0; i < numParticles; i++) {
-            // Apply gravity and look one step in the future
-            particleArray[i].vy += params.gravity * params.timeStep * 0.5;
-            update_position_AoS(i, particleArray, params);
-        }
+        // Apply half vy step as per leapfrog
+        thurst::for_each(d_particleArray.begin(), d_particleArray.end(),
+            ApplyHalfGravityFunctor(params));
 
-        // Create the linklist struct for grids/ cells
-        build_grid_sorted(particleArray, cellStart, params, cellSize, bounds,
-                gridRows, gridCols);
+        // Update position
+        thurst::for_each(d_particleArray.begin(), d_particleArray.end(),
+            UpdateParticleFunctor(params));
 
-        for (int i = 0; i < numParticles; i++) {
-            // Calc density
-            calculate_density_sorted(i, particleArray, params, cellStart, gridRows,
-                    gridCols, cellSize, bounds);
-        }
+        // Build grid using thurt for each
+        thurst::for_each(d_particleArray.begin(), d_particleArray.end(),
+            BuildGridHashFunctor(params, bounds, cellSize, gridRows, gridCols))
 
-        for (int i = 0; i < numParticles; i++) {
-            // Calc pressure
-            float forceX = 0.0;
-            float forceY = 0.0;
+        // Sort using thurst :)
+        thrust::sort(d_particleArray.begin(), d_particleArray.end(), ParticleHashComparator());
 
-            calculate_pressure_sorted(i, forceX, forceY, particleArray, params, cellStart,
-                    gridRows, gridCols, cellSize, bounds);
+        // Create cellStart array
+        thurst::fill(d_cellStart.begin(), d_cellStart.end(), -1);
+        const int threadsPerBlock = 256;
+        const int numBlocks = (params.numParticles + threadsPerBlock - 1) / threadsPerBlock;
+        find_cell_start_kernal<<<numBlocks, threadsPerBlock>>>(
+            thurst::raw_pointer_cast(d_particleArray.data()),
+            thrust::raw_pointer_cast(d_cellStart.data()),
+            params.numParticles);
+        
+        // Parallel calculate denisty
+        thurst::for_each(thurst::make_counting_iterator(0), thurst::make_counting_iterator(numParticles),
+            CalcDensityFunctor(params, bounds, cellSize, gridRows, gridCols, d_cellStart, d_particleArray));
 
-            // a = f / density
-            if (particleArray[i].density <= 0) continue;
-            float accelX = forceX / particleArray[i].density;
-            float accelY = forceY / particleArray[i].density;
-            particleArray[i].vx += accelX * timeStep;
-            particleArray[i].vy += accelY * timeStep;
+        // Parallel calculate pressure forces
+        thurst::for_each(thurst::make_counting_iterator(0), thurst::make_counting_iterator(numParticles),
+            CalcPressureFunctor(params, bounds, cellSize, gridRows, gridCols, d_cellStart, d_particleArray));
 
-        }
+        // Apply other half of leapfrog
+        thurst::for_each(d_particleArray.begin(), d_particleArray.end(),
+            ApplyHalfGravityFunctor(params));
 
-        for (int i = 0; i < numParticles; i++) {
-            // Update postions and box collisions
-            // update_position_AoS(i, particleArray, params);
-            particleArray[i].vy += params.gravity * params.timeStep * 0.5;
-            bounce_particle_AoS(i, particleArray, bounds, params);
-        }
+        // Bounce the particles
+        thurst::for_each(d_particleArray.begin(), d_particleArray.end(),
+            BounceParticleFunctor(params, bounds));
 
         // Stop execution time (dont count file saving)
         totalTime += std::chrono::duration_cast<mircoseconds>(timer::now() - start);
 
         // Save every saveFrames
         if (step % saveFrames == 0) {
-            // write_particle_positions_to_csv_AoS(csvFile, particleArray, step);
+            h_particleArray = d_particleArray;
+
             vector<float> positions(numParticles * numDimensions);
             vector<float> velocities(numParticles * numDimensions);
             for(int i = 0; i < numParticles; ++i) {
-                positions[get_x_index(i)] = particleArray[i].x;
-                positions[get_y_index(i)] = particleArray[i].y;
-                velocities[get_x_index(i)] = particleArray[i].vx;
-                velocities[get_y_index(i)] = particleArray[i].vy;
+                positions[get_x_index(i)] = h_particleArray[i].x;
+                positions[get_y_index(i)] = h_particleArray[i].y;
+                velocities[get_x_index(i)] = h_particleArray[i].vx;
+                velocities[get_y_index(i)] = h_particleArray[i].vy;
             }
             write_frame_to_gsd(handle, step, numParticles, bounds, positions, velocities, params);
         }
@@ -481,44 +509,21 @@ int main(int argc, char** argv)
     return 0;
 }
 
-// ======================== Functions ======================================
+// ==================== Custom CUDA Kernals ========================
 
-void build_grid_sorted(vector<Particle> &particleArray, vector<int> &cellStart, const SimulationParams &params,
-    float cellSize, const box &bounds, int &gridRows, int &gridCols)
+// In parallel find the satrt of each cell in the list of sorted particles
+__global__ void find_cell_start_kernal(const Particle* particleArray, int* cellStart, int numParticles)
 {
-    float width = bounds.xmax - bounds.xmin;
-    float height = bounds.ymax - bounds.ymin;
-    gridRows = std::max(1, (int)ceil(height / cellSize));
-    gridCols = std::max(1, (int)ceil(width / cellSize));
-
-    int numCells = gridRows * gridCols;
-    cellStart.assign(numCells, -1);
-
-    // Find hash for each particle
-    for (int i = 0; i < params.numParticles; i++) {
-        float x = particleArray[i].x;
-        float y = particleArray[i].y;
-
-        int cellX = (int)floor((x - bounds.xmin) / cellSize);
-        int cellY = (int)floor((y - bounds.ymin) / cellSize);
-        cellX = std::clamp(cellX, 0, gridCols - 1);
-        cellY = std::clamp(cellY, 0, gridRows - 1);
-
-        particleArray[i].gridHash = cellX + (cellY * gridCols);
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= numParticles) return;
+    int currentHash = particleArray[i].gridHash;
+    if (i == 0) {
+        cellStart[currentHash] = 0;
+        return;
     }
-
-    // Sort now according to gridHash
-    std::sort(particleArray.begin(), particleArray.end(), [](const Particle& a, const Particle& b) {
-        return a.gridHash < b.gridHash;
-    });
-
-    // Find the start of each cell in the array of particles
-    if (params.numParticles == 0) return;
-    cellStart[particleArray[0].gridHash] = 0;
-    for (int i = 1; i < params.numParticles; i++) {
-        if (particleArray[i].gridHash != particleArray[i-1].gridHash) {
-            cellStart[particleArray[i].gridHash] = i;
-        }
+    int previousHash = particleArray[i - 1].gridHash;
+    if (currentHash != previousHash) {
+        cellStart[currentHash] = i;
     }
 }
 
@@ -617,7 +622,7 @@ void init_random_particle_pos_AoS(vector<Particle> &particleArray,
     }
 }
 
-void init_grid_particle_pos_AoS(vector<Particle> &particleArray,
+void init_grid_particle_pos_AoS(thrust::host_vector<Particle> &particleArray,
         const box &bounds, const SimulationParams &params)
 {
     int numParticles = params.numParticles;
@@ -667,19 +672,6 @@ void init_grid_particle_pos_AoS(vector<Particle> &particleArray,
             
             currentParticle++;
         }
-    }
-}
-
-void write_particle_positions_to_csv_AoS(std::ofstream &file, const vector<Particle> &particleArray, const int step)
-{
-    if (file.is_open()) {
-        file << step << ',';
-        for (size_t i = 0; i < particleArray.size(); ++i) {
-            file << particleArray[i].x << "," << particleArray[i].y << (i == particleArray.size() - 1 ? "" : ",");
-        }
-        file << "\n";
-    } else {
-        std::cerr << "Unable to open file" << std::endl;
     }
 }
 
