@@ -52,7 +52,7 @@ cpu: $(TARGET_CPU)
 gpu: $(TARGET_GPU)
 
 $(TARGET_CPU): $(OBJS_CPU)
-	$(CXX) $(CXXFLAGS) $(OBJS_CPU) -o $@ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(OBJS_CPU) -o $@
 
 $(TARGET_GPU): $(OBJS_GPU)
 	$(NVCC) $(NVCCFLAGS) $(OBJS_GPU) -o $@ $(LDFLAGS)
