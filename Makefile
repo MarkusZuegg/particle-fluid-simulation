@@ -6,55 +6,68 @@ BINDIR = bin
 # Compilers
 CC = gcc
 CXX = g++
+NVCC = nvcc
+
 CFLAGS = -std=c11
 LIBCFLAGS = -std=c11
 CXXFLAGS = -Wall -pedantic -Wextra -std=c++2a -I$(LIBDIR) -L$(LIBDIR)
+
 DEBUG = -g
 OPT = -O2
 
-# Target
-TARGET = $(SRCDIR)/sph
+CUDA_INC = /opt/local/stow/cuda-11.1/include
+CUDA_LIB = /opt/local/stow/cuda-11.1/lib64
+GPU_ARCH = sm_35
+NVCCFLAGS = -std=c++17 -arch=$(GPU_ARCH) -I$(CUDA_INC) -I$(LIBDIR)
 
-# Sources
-SRC_CPP = $(SRCDIR)/sph.cpp
+LDFLAGS = -L$(LIBDIR) -L$(CUDA_LIB) -lcudart
+
+TARGET_CPU = $(SRCDIR)/sph_cpu
+TARGET_GPU = $(SRCDIR)/sph_gpu
+
 SRC_C = $(wildcard $(LIBDIR)/*.c)
+OBJS_C = $(patsubst $(LIBDIR)/%.c,$(BINDIR)/%.o,$(SRC_C))
 
-# Object files in bin/
-OBJS = $(BINDIR)/sph.o $(patsubst $(LIBDIR)/%.c,$(BINDIR)/%.o,$(SRC_C))
+OBJS_CPU = $(BINDIR)/sph_cpu.o $(OBJS_C)
+OBJS_GPU = $(BINDIR)/sph_gpu.o $(OBJS_C)
 
 # Default goal
 .DEFAULT_GOAL := all
-.PHONY: clean debug all gprof opti
+.PHONY: all cpu gpu clean debug opti
 
-all: $(TARGET)
+all: $(TARGET_CPU) $(TARGET_GPU)
 
 debug: CFLAGS += $(DEBUG)
+debug: NVCCFLAGS += $(DEBUG)
 debug: CXXFLAGS += $(DEBUG)
 debug: clean $(TARGET)
 
-gprof: LIBCFLAGS += -pg
-gprof: CXXFLAGS += -pg
-gprof: clean $(TARGET)
-
 opti: CFLAGS += $(OPT)
+opti: NVCCFLAGS += $(OPT)
 opti: LIBCFLAGS += $(OPT)
 opti: CXXFLAGS += $(OPT)
 opti: clean $(TARGET)
 
-$(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) $(OBJS) -o $(TARGET)
+cpu: $(TARGET_CPU)
+gpu: $(TARGET_GPU)
 
-# Ensure bin directory exists
+$(TARGET_CPU): $(OBJS_CPU)
+	$(CXX) $(CXXFLAGS) $(OBJS_CPU) -o $@ $(LDFLAGS)
+
+$(TARGET_GPU): $(OBJS_GPU)
+	$(NVCC) $(NVCCFLAGS) $(OBJS_GPU) -o $@ $(LDFLAGS)
+
 $(BINDIR):
 	mkdir -p $(BINDIR)
 
-# Compile C++ source
-$(BINDIR)/sph.o: $(SRCDIR)/sph.cpp | $(BINDIR)
+$(BINDIR)/sph_cpu.o: $(SRCDIR)/sph.cpp | $(BINDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Compile C library sources
+$(BINDIR)/sph_gpu.o: $(SRCDIR)/sph-cuda.cu | $(BINDIR)
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
 $(BINDIR)/%.o: $(LIBDIR)/%.c | $(BINDIR)
 	$(CC) $(LIBCFLAGS) -c $< -o $@
 
 clean:
-	rm -rf $(BINDIR) $(TARGET) src/gmon.out src/analysis.txt
+	rm -rf $(BINDIR) $(TARGET_CPU) $(TARGET_GPU)
