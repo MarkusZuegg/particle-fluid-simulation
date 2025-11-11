@@ -21,8 +21,8 @@ sbatch <<EOM
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --output=./logs/%x%j.out
-#SBATCH --error=./logs/%x%j.err
+#SBATCH --output=./logs/x%j.out
+#SBATCH --error=./logs/x%j.err
 #SBATCH --gpus-per-task=${REQUEST_GPUS}
 #SBATCH --time=00:10:00
 
