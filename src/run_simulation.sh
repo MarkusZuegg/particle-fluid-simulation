@@ -7,10 +7,10 @@ if [[ -z "$1" ]]; then
 fi
 
 TARGET_EXEC="sph_$1"
-REQUEST_GPUS=0
+REQUEST_GPUS=1
 
-if [[ "$1" == "gpu" ]]; then
-    REQUEST_GPUS=1
+if [[ "$1" == "cpu" ]]; then
+    REQUEST_GPUS=0
 fi
 
 mkdir -p ./logs
