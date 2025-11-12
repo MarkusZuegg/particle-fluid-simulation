@@ -118,11 +118,8 @@ struct BuildGridHashFunctor
         y_ptr(y), hash_ptr(hash) {}
 
     __device__ void operator()(int i) const {
-        const float x = x_ptr[i];
-        const float y = y_ptr[i];
-
-        int cellX = (int)floorf((p.x - bounds.xmin) / cellSize);
-        int cellY = (int)floorf((p.y - bounds.ymin) / cellSize);
+        int cellX = (int)floorf((x_ptr[i] - bounds.xmin) / cellSize);
+        int cellY = (int)floorf((y_ptr[i] - bounds.ymin) / cellSize);
         // clamp with out using std::clamp
         if (cellX < 0) cellX = 0;
         if (cellX >= gridCols) cellX = gridCols - 1;
@@ -186,9 +183,9 @@ struct CalcDensityFunctor
                 if (start_idx == -1) continue;
 
                 // Loop untill particle's hash != current cell
-                for (int j = start_idx; j < params.numParticles && hash_ptr[i] == neighbourCell; j++) {
-                    float x2 = x_ptr[i];
-                    float y2 = y_ptr[i];
+                for (int j = start_idx; j < params.numParticles && hash_ptr[j] == neighbourCell; j++) {
+                    float x2 = x_ptr[j];
+                    float y2 = y_ptr[j];
                     float dist = distance_from_two_points(x1, y1, x2, y2);
                     float influence = ploy6_kernal(dist, params.smoothingRadius);
                     density += params.mass * influence;
@@ -266,7 +263,7 @@ struct CalcPressureFunctor
                 if (start_idx == -1) continue;
 
                 // Loop untill particle's hash != current cell
-                for (int j = start_idx; j < params.numParticles && hash_ptr[i] == neighbourCell; j++) {
+                for (int j = start_idx; j < params.numParticles && hash_ptr[j] == neighbourCell; j++) {
                     if (i == j) continue;
 
                     // get other particle postion
@@ -458,49 +455,59 @@ int main(int argc, char** argv)
     for (int step = 0; step < maxNumSteps; step++) {
         // Time execution
         auto start = timer::now();
+
+        float* d_x_ptr = thrust::raw_pointer_cast(d_x.data());
+        float* d_y_ptr = thrust::raw_pointer_cast(d_y.data());
+        float* d_vx_ptr = thrust::raw_pointer_cast(d_vx.data());
+        float* d_vy_ptr = thrust::raw_pointer_cast(d_vy.data());
+        float* d_density_ptr = thrust::raw_pointer_cast(d_density.data());
+        int* d_gridHash_ptr = thrust::raw_pointer_cast(d_gridHash.data());
+        int* d_cellStart_ptr = thrust::raw_pointer_cast(d_cellStart.data());
     
         // Apply half vy step as per leapfrog
-        thrust::for_each(d_particleArray.begin(), d_particleArray.end(),
-            ApplyHalfGravityFunctor(params));
+        thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
+            ApplyHalfGravityFunctor(params, d_vy_ptr));
 
         // Update position
-        thrust::for_each(d_particleArray.begin(), d_particleArray.end(),
-            UpdateParticleFunctor(params));
+        thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
+            UpdateParticleFunctor(params, d_x_ptr, d_y_ptr, d_vx_ptr, d_vy_ptr));
 
         // Build grid using thurt for each
-        thrust::for_each(d_particleArray.begin(), d_particleArray.end(),
-            BuildGridHashFunctor(params, bounds, cellSize, gridRows, gridCols));
+        thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
+            BuildGridHashFunctor(params, bounds, cellSize, gridRows, gridCols,
+                d_x_ptr, d_y_ptr, d_gridHash_ptr));
 
         // Sort using thrust :)
-        thrust::sort(d_particleArray.begin(), d_particleArray.end(), ParticleHashComparator());
+        thrust::sort_by_key(
+            d_gridHash.begin(), d_gridHash.end(),
+            thrust::make_zip_iterator(thrust::make_tuple(d_x.begin(), d_y.begin(), d_vx.begin(),
+                                        d_vy.begin(), d_density.begin())));
 
         // Create cellStart array
         thrust::fill(d_cellStart.begin(), d_cellStart.end(), -1);
-    
-        // Get pointers to the data
-        Particle* d_particleArray_ptr = thrust::raw_pointer_cast(d_particleArray.data());
-        int* d_cellStart_ptr = thrust::raw_pointer_cast(d_cellStart.data());
 
         const int threadsPerBlock = 256;
         const int numBlocks = (params.numParticles + threadsPerBlock - 1) / threadsPerBlock;
         find_cell_start_kernal<<<numBlocks, threadsPerBlock>>>(
-            d_particleArray_ptr, d_cellStart_ptr, params.numParticles);
+            d_gridHash_ptr, d_cellStart_ptr, params.numParticles);
         
         // Parallel calculate denisty
         thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
-            CalcDensityFunctor(params, bounds, cellSize, gridRows, gridCols, d_cellStart_ptr, d_particleArray_ptr));
+            CalcDensityFunctor(params, bounds, cellSize, gridRows, gridCols,
+                d_cellStart_ptr, d_x_ptr, d_y_ptr, d_gridHash_ptr, d_density_ptr));
 
         // Parallel calculate pressure forces
         thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
-            CalcPressureFunctor(params, bounds, cellSize, gridRows, gridCols, d_cellStart_ptr, d_particleArray_ptr));
+            CalcPressureFunctor(params, bounds, cellSize, gridRows, gridCols,
+                d_cellStart_ptr, d_x_ptr, d_y_ptr, d_density_ptr, d_gridHash_ptr, d_vx_ptr, d_vy_ptr));
 
         // Apply other half of leapfrog
-        thrust::for_each(d_particleArray.begin(), d_particleArray.end(),
-            ApplyHalfGravityFunctor(params));
+        thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
+            ApplyHalfGravityFunctor(params, d_vy_ptr));
 
         // Bounce the particles
-        thrust::for_each(d_particleArray.begin(), d_particleArray.end(),
-            BounceParticleFunctor(params, bounds));
+        thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
+            BounceParticleFunctor(params, bounds, d_x_ptr, d_y_ptr, d_vx_ptr, d_vy_ptr));
 
         // Stop execution time (dont count file saving)
         totalTime += std::chrono::duration_cast<mircoseconds>(timer::now() - start);
@@ -511,7 +518,7 @@ int main(int argc, char** argv)
             h_y = d_y;
             vector<float> positions(numParticles * numDimensions);
             for(int i = 0; i < numParticles; ++i) {
-                positions[get_x_index(i)] = h_x[i]
+                positions[get_x_index(i)] = h_x[i];
                 positions[get_y_index(i)] = h_y[i];
             }
             write_frame_to_gsd(handle, step, numParticles, bounds, positions, params);
