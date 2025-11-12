@@ -55,31 +55,9 @@ typedef struct
     float viscosity;
 } SimulationParams;
 
-
-// Struct to hold all varibales needed for a particle
-// AoS implementation
-typedef struct
-{
-    float x;
-    float y;
-    float vx;
-    float vy;
-    float density;
-    int gridHash;
-} Particle;
-
-//! currently depreicated (maybe use later)
-// Ensum to hold all version that can be run
-enum Versions {
-    SoA = 0, //n^2 approach
-    SoA_LINKED = 1, // struct of arrays, with linkedlist grid
-    AoS_LINKED = 2, // array of structs, with linkedlist grid
-    AoS_SORTED = 3 // array of structs, with sorted grid
-};
-
 // ========================= Func Protos =======================================
 
-__global__ void find_cell_start_kernal(const Particle* particleArray, int* cellStart, int numParticles);
+__global__ void find_cell_start_kernal(const int* gridHashArray, int* cellStart, int numParticles);
 __device__ inline float ploy6_kernal(float dist, float radius);
 __device__ inline float spikey_kernal(float dist, float radius);
 __device__ inline float spikey_kernal_derivative(float dist, float radius);
@@ -100,17 +78,20 @@ void init_grid_particle_pos_SoA(
 // File saving
 void save_to_json(const std::string &filename, const SimulationParams &params, const box &bounds);
 void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles,
-        const box &bounds, const vector<float> &positions, const vector<float> &velocities,
-        const SimulationParams &params);
+        const box &bounds, const vector<float> &positions, const SimulationParams &params);
 
 // ===================== Thrust Functors =======================
 
 struct ApplyHalfGravityFunctor
 {
     const SimulationParams params;
-    __host__ ApplyHalfGravityFunctor(const SimulationParams& params) : params(params) {}
-    __device__ void operator()(Particle& p) const {
-        p.vy += params.gravity * params.timeStep * 0.5f;
+    float* vy_ptr;
+
+    __host__ ApplyHalfGravityFunctor(const SimulationParams& params, float* vy)
+        : params(params), vy_ptr(vy) {}
+
+    __device__ void operator()(int i) const {
+        vy_ptr[i] += params.gravity * params.timeStep * 0.5f;
     }
 };
 
@@ -127,11 +108,19 @@ struct BuildGridHashFunctor
     const float cellSize;
     const int gridRows;
     const int gridCols;
+    const float* x_ptr;
+    const float* y_ptr;
+    int* hash_ptr;
 
-    __host__ BuildGridHashFunctor(const SimulationParams& params, const box& b, float cs, int gr, int gc)
-        : params(params), bounds(b), cellSize(cs), gridRows(gr), gridCols(gc) {}
+    __host__ BuildGridHashFunctor(const SimulationParams& params, const box& b, float cs, int gr, int gc,
+        const float* x, const float* y, int* hash)
+        : params(params), bounds(b), cellSize(cs), gridRows(gr), gridCols(gc), x_ptr(x),
+        y_ptr(y), hash_ptr(hash) {}
 
-    __device__ void operator()(Particle& p) const {
+    __device__ void operator()(int i) const {
+        const float x = x_ptr[i];
+        const float y = y_ptr[i];
+
         int cellX = (int)floorf((p.x - bounds.xmin) / cellSize);
         int cellY = (int)floorf((p.y - bounds.ymin) / cellSize);
         // clamp with out using std::clamp
@@ -140,14 +129,7 @@ struct BuildGridHashFunctor
         if (cellY < 0) cellY = 0;
         if (cellY >= gridRows) cellY = gridRows - 1;
 
-        p.gridHash = cellX + (cellY * gridCols);
-    }
-};
-
-struct ParticleHashComparator
-{
-    __host__ __device__ bool operator()(const Particle& a, const Particle& b) const {
-        return a.gridHash < b.gridHash;
+        hash_ptr[i] = cellX + (cellY * gridCols);
     }
 };
 
@@ -167,17 +149,20 @@ struct CalcDensityFunctor
     const int gridRows;
     const int gridCols;
     const int* cellStart;
-    Particle* particleArray;
+    const float* x_ptr;
+    const float* y_ptr;
+    const int* hash_ptr;
+    float* density_ptr;
 
-    __host__ CalcDensityFunctor(const SimulationParams& params, const box& b, float cs, int gr, int gc,
-        const int* cs_ptr, Particle* p_ptr)
-        : params(params), bounds(b), cellSize(cs), gridCols(gc), gridRows(gr), cellStart(cs_ptr), 
-        particleArray(p_ptr) {}
+    __host__ CalcDensityFunctor(const SimulationParams& p, const box& b, float cs, int gr, int gc,
+        const int* cs_ptr, const float* x, const float* y, const int* hash, float* density)
+        : params(p), bounds(b), cellSize(cs), gridRows(gr), gridCols(gc), cellStart(cs_ptr),
+          x_ptr(x), y_ptr(y), hash_ptr(hash), density_ptr(density) {}
 
     __device__ void operator()(int i) const {
         float density = 0.0;
-        float x1 = particleArray[i].x;
-        float y1 = particleArray[i].y;
+        float x1 = x_ptr[i];
+        float y1 = y_ptr[i];
 
         int cellX = static_cast<int>(floorf((x1 - bounds.xmin) / cellSize));
         int cellY = static_cast<int>(floorf((y1 - bounds.ymin) / cellSize));
@@ -201,16 +186,16 @@ struct CalcDensityFunctor
                 if (start_idx == -1) continue;
 
                 // Loop untill particle's hash != current cell
-                for (int j = start_idx; j < params.numParticles && particleArray[j].gridHash == neighbourCell; j++) {
-                    float x2 = particleArray[j].x;
-                    float y2 = particleArray[j].y;
+                for (int j = start_idx; j < params.numParticles && hash_ptr[i] == neighbourCell; j++) {
+                    float x2 = x_ptr[i];
+                    float y2 = y_ptr[i];
                     float dist = distance_from_two_points(x1, y1, x2, y2);
                     float influence = ploy6_kernal(dist, params.smoothingRadius);
                     density += params.mass * influence;
                 }
             }
         }
-        particleArray[i].density = density;
+        density_ptr[i] = density;
     }
 };
 
@@ -230,25 +215,30 @@ struct CalcPressureFunctor
     const int gridRows;
     const int gridCols;
     const int* cellStart;
-    Particle* particleArray;
+    const float* x_ptr;
+    const float* y_ptr;
+    float* vx_ptr;
+    float* vy_ptr;
+    const float* density_ptr;
+    const int* hash_ptr;
 
-    __host__ CalcPressureFunctor(const SimulationParams& params, const box& b, float cs, int gr, int gc,
-        const int* cs_ptr, Particle* p_ptr)
-        : params(params), bounds(b), cellSize(cs), gridCols(gc), gridRows(gr), cellStart(cs_ptr), 
-        particleArray(p_ptr) {}
-
+    __host__ CalcPressureFunctor(const SimulationParams& p, const box& b, float cs, int gr, int gc,
+        const int* cs_ptr, const float* x, const float* y, const float* density, const int* hash, float* vx, float* vy)
+        : params(p), bounds(b), cellSize(cs), gridRows(gr), gridCols(gc), cellStart(cs_ptr),
+          x_ptr(x), y_ptr(y), vx_ptr(vx), vy_ptr(vy), density_ptr(density), hash_ptr(hash) {}
+    
     __device__ void operator()(int i) const {
         float force_x = 0.0;
         float force_y = 0.0;
 
-        float x1 = particleArray[i].x;
-        float y1 = particleArray[i].y;
+        float x1 = x_ptr[i];
+        float y1 = y_ptr[i];
 
         // Get current particle velocity
-        float vx1 = particleArray[i].vx;
-        float vy1 = particleArray[i].vy;
+        float vx1 = vx_ptr[i];
+        float vy1 = vy_ptr[i];
 
-        float density1 = particleArray[i].density;
+        float density1 = density_ptr[i];
         if (density1 <= 0.0) return;
         float pressure1 = density_to_pressure(density1, params);
 
@@ -276,12 +266,12 @@ struct CalcPressureFunctor
                 if (start_idx == -1) continue;
 
                 // Loop untill particle's hash != current cell
-                for (int j = start_idx; j < params.numParticles && particleArray[j].gridHash == neighbourCell; j++) {
-                    if (&particleArray[i] == &particleArray[j]) continue;
+                for (int j = start_idx; j < params.numParticles && hash_ptr[i] == neighbourCell; j++) {
+                    if (i == j) continue;
 
                     // get other particle postion
-                    float x2 = particleArray[j].x;
-                    float y2 = particleArray[j].y;
+                    float x2 = x_ptr[j];
+                    float y2 = y_ptr[j];
 
                     // Get distance/ magnitiude
                     float dist = distance_from_two_points(x1, y1, x2, y2);
@@ -308,8 +298,8 @@ struct CalcPressureFunctor
                     // do viscosity things
                     float influence = viscosity_kernal(dist, params.smoothingRadius);
 
-                    float vx2 = particleArray[j].vx;
-                    float vy2 = particleArray[j].vy;
+                    float vx2 = vx_ptr[j];
+                    float vy2 = vy_ptr[j];
                     
                     float vx_diff = vx2 - vx1;
                     float vy_diff = vy2 - vy1;
@@ -319,8 +309,8 @@ struct CalcPressureFunctor
                 }
             }
         }
-        particleArray[i].vx += (force_x / density1) * params.timeStep;
-        particleArray[i].vy += (force_y / density1) * params.timeStep;
+        vx_ptr[i] += (force_x / density1) * params.timeStep;
+        vy_ptr[i] += (force_y / density1) * params.timeStep;
     }
 };
 
@@ -331,27 +321,33 @@ struct BounceParticleFunctor
 {
     const SimulationParams params;
     const box bounds;
+    float* x_ptr;
+    float* y_ptr;
+    float* vx_ptr;
+    float* vy_ptr;
 
-    __host__ BounceParticleFunctor(const SimulationParams& params, const box& b) : params(params), bounds(b) {}
+    __host__ BounceParticleFunctor(const SimulationParams& p, const box& b,
+        float* x, float* y, float* vx, float* vy)
+        : params(p), bounds(b), x_ptr(x), y_ptr(y), vx_ptr(vx), vy_ptr(vy) {}
     
-    __device__ void operator()(Particle& p) const {
+    __device__ void operator()(int i) const {
         // check walls in x
-        if (p.x - params.radius < bounds.xmin) {
-            p.x = bounds.xmin + params.radius;
-            p.vx *= -1 * params.elasticity;
+        if (x_ptr[i] - params.radius < bounds.xmin) {
+            x_ptr[i] = bounds.xmin + params.radius;
+            vx_ptr[i] *= -1 * params.elasticity;
         }
-        if (p.x + params.radius > bounds.xmax) {
-            p.x = bounds.xmax - params.radius;
-            p.vx *= -1 * params.elasticity;
+        if (x_ptr[i] + params.radius > bounds.xmax) {
+            x_ptr[i] = bounds.xmax - params.radius;
+            vx_ptr[i] *= -1 * params.elasticity;
         }
         // Check walls in y
-        if (p.y - params.radius < bounds.ymin) {
-            p.y = bounds.ymin + params.radius;
-            p.vy *= -1 * params.elasticity;
+        if (y_ptr[i] - params.radius < bounds.ymin) {
+            y_ptr[i] = bounds.ymin + params.radius;
+            vy_ptr[i] *= -1 * params.elasticity;
         }
-        if (p.y + params.radius > bounds.ymax) {
-            p.y = bounds.ymax - params.radius;
-            p.vy *= -1 * params.elasticity;
+        if (y_ptr[i] + params.radius > bounds.ymax) {
+            y_ptr[i] = bounds.ymax - params.radius;
+            vy_ptr[i] *= -1 * params.elasticity;
         }
     }
 };
@@ -361,12 +357,17 @@ struct BounceParticleFunctor
 struct UpdateParticleFunctor
 {
     const SimulationParams params;
+    float* x_ptr;
+    float* y_ptr;
+    const float* vx_ptr;
+    const float* vy_ptr;
 
-    __host__ UpdateParticleFunctor(const SimulationParams& params) : params(params) {}
+    __host__ UpdateParticleFunctor(const SimulationParams& p, float* x, float* y, const float* vx, const float* vy)
+        : params(p), x_ptr(x), y_ptr(y), vx_ptr(vx), vy_ptr(vy) {}
 
-    __device__ void operator()(Particle& p) const {
-        p.x += p.vx * params.timeStep;
-        p.y += p.vy * params.timeStep;
+    __device__ void operator()(int i) const {
+        x_ptr[i] += vx_ptr[i] * params.timeStep;
+        y_ptr[i] += vy_ptr[i] * params.timeStep;
     }
 };
 
@@ -400,9 +401,6 @@ int main(int argc, char** argv)
     const float viscosity = 0.1;
 
     const box bounds = {12, 0, 10, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
-
-    // Change the line below to switch between each version
-    int runType = AoS_SORTED;
 
     // Set up struct to hold params
     const SimulationParams params = {
@@ -440,11 +438,21 @@ int main(int argc, char** argv)
     }
 
     // ===================== Simulation loop ==================================
-    thrust::host_vector<Particle> h_particleArray(numParticles);
-    //! need to change this
-    init_grid_particle_pos_AoS(h_particleArray, bounds, params);
+    // Set up host vectors
+    thrust::host_vector<float> h_x(numParticles);
+    thrust::host_vector<float> h_y(numParticles);
+    thrust::host_vector<float> h_vx(numParticles, 0.0); // set these to all 0
+    thrust::host_vector<float> h_vy(numParticles, 0.0);
+    thrust::host_vector<float> h_density(numParticles, 0.0);
+    init_grid_particle_pos_SoA(h_x, h_y, bounds, params);
 
-    thrust::device_vector<Particle> d_particleArray = h_particleArray;
+    // Set up device vectors
+    thrust::device_vector<float> d_x = h_x;
+    thrust::device_vector<float> d_y = h_y;
+    thrust::device_vector<float> d_vx = h_vx;
+    thrust::device_vector<float> d_vy = h_vy;
+    thrust::device_vector<float> d_density = h_density;
+    thrust::device_vector<int> d_gridHash(numParticles);
     thrust::device_vector<int> d_cellStart(numCells);
 
     for (int step = 0; step < maxNumSteps; step++) {
@@ -499,17 +507,14 @@ int main(int argc, char** argv)
 
         // Save every saveFrames
         if (step % saveFrames == 0) {
-            h_particleArray = d_particleArray;
-
+            h_x = d_x;
+            h_y = d_y;
             vector<float> positions(numParticles * numDimensions);
-            vector<float> velocities(numParticles * numDimensions);
             for(int i = 0; i < numParticles; ++i) {
-                positions[get_x_index(i)] = h_particleArray[i].x;
-                positions[get_y_index(i)] = h_particleArray[i].y;
-                velocities[get_x_index(i)] = h_particleArray[i].vx;
-                velocities[get_y_index(i)] = h_particleArray[i].vy;
+                positions[get_x_index(i)] = h_x[i]
+                positions[get_y_index(i)] = h_y[i];
             }
-            write_frame_to_gsd(handle, step, numParticles, bounds, positions, velocities, params);
+            write_frame_to_gsd(handle, step, numParticles, bounds, positions, params);
         }
     }
 
@@ -522,7 +527,7 @@ int main(int argc, char** argv)
 // ==================== Custom CUDA Kernals ========================
 
 // In parallel find the satrt of each cell in the list of sorted particles
-__global__ void find_cell_start_kernal(int* gridHashArray, int* cellStart, int numParticles)
+__global__ void find_cell_start_kernal(const int* gridHashArray, int* cellStart, int numParticles)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= numParticles) return;
@@ -698,8 +703,7 @@ void save_to_json(const std::string &filename, const SimulationParams &params, c
 
 // REF: Got chatGPT to make most of this, I removed the error handling (exessive)
 void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles,
-        const box &bounds, const vector<float> &positions, const vector<float> &velocities,
-        const SimulationParams &params)
+        const box &bounds, const vector<float> &positions, const SimulationParams &params)
 {
     int ret = 0;
 
@@ -716,9 +720,6 @@ void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles
         pos_float[i * 3 + 0] = static_cast<float>(positions[get_x_index(i)] - box_center_x);
         pos_float[i * 3 + 1] = static_cast<float>(positions[get_y_index(i)] - box_center_y);
         pos_float[i * 3 + 2] = 0.0f - box_center_z; // Assuming z is 0
-
-        vel_float[i * 3 + 0] = static_cast<float>(velocities[get_x_index(i)]);
-        vel_float[i * 3 + 1] = static_cast<float>(velocities[get_y_index(i)]);
     }
 
     // for saving the particle radius
@@ -732,7 +733,6 @@ void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles
     // Particle Data
     ret = gsd_write_chunk(&handle, "particles/N", GSD_TYPE_UINT32, 1, 1, 0, &numParticles);
     ret = gsd_write_chunk(&handle, "particles/position", GSD_TYPE_FLOAT, numParticles, 3, 0, pos_float.data());
-    // ret = gsd_write_chunk(&handle, "particles/velocity", GSD_TYPE_FLOAT, numParticles, 3, 0, vel_float.data());
     ret = gsd_write_chunk(&handle, "particles/diameter", GSD_TYPE_FLOAT, numParticles, 1, 0, diameters.data());
     // Particle ID
     vector<uint32_t> typeids(numParticles, 0);
