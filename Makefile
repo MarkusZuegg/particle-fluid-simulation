@@ -37,7 +37,7 @@ OBJS_GPU_SOA = $(BINDIR)/sph_gpu_SoA.o $(OBJS_C)
 .DEFAULT_GOAL := all
 .PHONY: all cpu gpu clean debug opti gpu_SoA
 
-all: $(TARGET_CPU) $(TARGET_GPU)
+all: $(TARGET_CPU) $(TARGET_GPU) $(TARGET_GPU_SOA)
 
 debug: CFLAGS += $(DEBUG)
 debug: NVCCFLAGS += $(DEBUG)
