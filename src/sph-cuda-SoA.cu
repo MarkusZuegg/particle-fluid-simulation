@@ -384,9 +384,9 @@ int main(int argc, char** argv)
     mircoseconds totalTime{0};
 
     // ============= Simulation params ==================
-    const int maxNumSteps = 100;
+    const int maxNumSteps = 8000;
     const int saveFrames = 10; // How many frames to save. != 0
-    const int numParticles = 16; // 35 grid
+    const int numParticles = 1225; // 35 grid
     const float timeStep = 0.001;
 
     // gravity!!! HERE
