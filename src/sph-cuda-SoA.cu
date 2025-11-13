@@ -58,6 +58,8 @@ typedef struct
 // ========================= Func Protos =======================================
 
 __global__ void find_cell_start_kernal(const int* gridHashArray, int* cellStart, int numParticles);
+__global__ void build_grid_atomic_kernel(int* cellStart, int* particleNext, const float* x_ptr, const float* y_ptr,
+    const box bounds, float cellSize, int gridCols, int gridRows, int numParticles);
 __device__ inline float ploy6_kernal(float dist, float radius);
 __device__ inline float spikey_kernal(float dist, float radius);
 __device__ inline float spikey_kernal_derivative(float dist, float radius);
@@ -471,10 +473,6 @@ int main(int argc, char** argv)
         // Update position
         thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
             UpdateParticleFunctor(params, d_x_ptr, d_y_ptr, d_vx_ptr, d_vy_ptr));
-
-        // Build grid using thurt for each
-        thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
-            BuildGridHashFunctor(params, bounds, cellSize, gridRows, gridCols, d_x_ptr, d_y_ptr, d_gridHash_ptr));
 
         // Create cellStart array
         thrust::fill(d_cellStart.begin(), d_cellStart.end(), -1);
