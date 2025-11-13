@@ -25,7 +25,7 @@ using mircoseconds = std::chrono::microseconds;
 
 // =================== Global Variables ========================================
 const int numDimensions = 2;
-#define ZORDER = True
+#define ZORDER = true
 
 // =========================== Structs =========================================
 // Bounding box for simulation
