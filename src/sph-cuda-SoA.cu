@@ -273,8 +273,8 @@ struct CalcPressureFunctor
 
                 // Loop untill particle's hash != current cell
                 for (int j = start_idx; j < params.numParticles && hash_ptr[j] == neighbourCell; j++) {
-                    if (i == j) continue;
                     const int nextOgIndex = sorted_indices_ptr[j];
+                    if (ogIndex == nextOgIndex) continue;
 
                     // get other particle postion
                     float x2 = x_ptr[nextOgIndex];
