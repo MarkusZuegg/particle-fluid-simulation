@@ -244,7 +244,7 @@ struct CalcPressureFunctor
         float vx1 = vx_ptr[ogIndex];
         float vy1 = vy_ptr[ogIndex];
 
-        float density1 = density_ptr[i];
+        float density1 = density_ptr[ogIndex];
         if (density1 <= 0.0) return;
         float pressure1 = density_to_pressure(density1, params);
 
@@ -488,13 +488,11 @@ int main(int argc, char** argv)
             UpdateParticleFunctor(params, d_x_ptr, d_y_ptr, d_vx_ptr, d_vy_ptr));
 
         // Build grid using thurt for each
-        thrust::sort_by_key(d_gridHash.begin(), d_gridHash.end(), d_particle_indices.begin());
+        thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
+            BuildGridHashFunctor(params, bounds, cellSize, gridRows, gridCols, d_x_ptr, d_y_ptr, d_gridHash_ptr));
 
         // Sort using thrust :)
-        thrust::sort_by_key(
-            d_gridHash.begin(), d_gridHash.end(),
-            thrust::make_zip_iterator(thrust::make_tuple(d_x.begin(), d_y.begin(), d_vx.begin(),
-                                        d_vy.begin(), d_density.begin())));
+        thrust::sort_by_key(d_gridHash.begin(), d_gridHash.end(), d_particleIndicies.begin());
 
         // Create cellStart array
         thrust::fill(d_cellStart.begin(), d_cellStart.end(), -1);
