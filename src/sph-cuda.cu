@@ -25,6 +25,7 @@ using mircoseconds = std::chrono::microseconds;
 
 // =================== Global Variables ========================================
 const int numDimensions = 2;
+#define ZORDER = True
 
 // =========================== Structs =========================================
 // Bounding box for simulation
@@ -86,6 +87,7 @@ __device__ inline float spikey_kernal_derivative(float dist, float radius);
 __device__ inline float viscosity_kernal(float dist, float radius);
 __device__ float distance_from_two_points(float x1, float y1, float x2, float y2);
 __device__ float density_to_pressure(float density, const SimulationParams &params);
+__device__ inline unsigned int interleave_bits(unsigned int x, unsigned int y);
 
 // General
 int get_x_index(int i);
@@ -141,7 +143,11 @@ struct BuildGridHashFunctor
         if (cellY < 0) cellY = 0;
         if (cellY >= gridRows) cellY = gridRows - 1;
 
-        p.gridHash = cellX + (cellY * gridCols);
+        if (ZORDER) {
+            p.gridHash = interleave_bits(cellX, cellY);
+        } else {
+            p.gridHash = cellX + (cellY * gridCols);
+        }
     }
 };
 
@@ -606,6 +612,23 @@ __device__ float density_to_pressure(float density, const SimulationParams &para
     float densityError = density - params.targetDensity;
     float pressure = densityError * params.pressureMulti;
     return pressure;
+}
+
+// found from https://graphics.stanford.edu/%7Eseander/bithacks.html#InterleaveBMN
+// For creating a Morton Number for Z order curve hashing
+__device__ inline unsigned int interleave_bits(unsigned int x, unsigned int y)
+{
+    x = (x | (x << 8)) & 0x00FF00FF;
+    x = (x | (x << 4)) & 0x0F0F0F0F;
+    x = (x | (x << 2)) & 0x33333333;
+    x = (x | (x << 1)) & 0x55555555;
+
+    y = (y | (y << 8)) & 0x00FF00FF;
+    y = (y | (y << 4)) & 0x0F0F0F0F;
+    y = (y | (y << 2)) & 0x33333333;
+    y = (y | (y << 1)) & 0x55555555;
+
+    return x | (y << 1);
 }
 
 // ============= Particle INITS ==================
