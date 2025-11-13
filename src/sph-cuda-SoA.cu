@@ -150,16 +150,20 @@ struct CalcDensityFunctor
     const float* y_ptr;
     const int* hash_ptr;
     float* density_ptr;
+    const int* sorted_indices_ptr;
 
     __host__ CalcDensityFunctor(const SimulationParams& p, const box& b, float cs, int gr, int gc,
-        const int* cs_ptr, const float* x, const float* y, const int* hash, float* density)
+        const int* cs_ptr, const float* x, const float* y, const int* hash, float* density, const int* sortedIndices)
         : params(p), bounds(b), cellSize(cs), gridRows(gr), gridCols(gc), cellStart(cs_ptr),
-          x_ptr(x), y_ptr(y), hash_ptr(hash), density_ptr(density) {}
+          x_ptr(x), y_ptr(y), hash_ptr(hash), density_ptr(density), sorted_indices_ptr(sortedIndices) {}
 
     __device__ void operator()(int i) const {
+        // Use sorted index to find actual index
+        const int ogIndex = sorted_indices_ptr[i];
+
         float density = 0.0;
-        float x1 = x_ptr[i];
-        float y1 = y_ptr[i];
+        float x1 = x_ptr[ogIndex];
+        float y1 = y_ptr[ogIndex];
 
         int cellX = static_cast<int>(floorf((x1 - bounds.xmin) / cellSize));
         int cellY = static_cast<int>(floorf((y1 - bounds.ymin) / cellSize));
@@ -184,15 +188,16 @@ struct CalcDensityFunctor
 
                 // Loop untill particle's hash != current cell
                 for (int j = start_idx; j < params.numParticles && hash_ptr[j] == neighbourCell; j++) {
-                    float x2 = x_ptr[j];
-                    float y2 = y_ptr[j];
+                    const int nextOgIndex = sorted_indices_ptr[j];
+                    float x2 = x_ptr[nextOgIndex];
+                    float y2 = y_ptr[nextOgIndex];
                     float dist = distance_from_two_points(x1, y1, x2, y2);
                     float influence = ploy6_kernal(dist, params.smoothingRadius);
                     density += params.mass * influence;
                 }
             }
         }
-        density_ptr[i] = density;
+        density_ptr[ogIndex] = density;
     }
 };
 
@@ -218,22 +223,26 @@ struct CalcPressureFunctor
     float* vy_ptr;
     const float* density_ptr;
     const int* hash_ptr;
+    const int* sorted_indices_ptr;
 
     __host__ CalcPressureFunctor(const SimulationParams& p, const box& b, float cs, int gr, int gc,
-        const int* cs_ptr, const float* x, const float* y, const float* density, const int* hash, float* vx, float* vy)
+        const int* cs_ptr, const float* x, const float* y, const float* density, const int* hash,
+        float* vx, float* vy, const int* sortedIndices)
         : params(p), bounds(b), cellSize(cs), gridRows(gr), gridCols(gc), cellStart(cs_ptr),
-          x_ptr(x), y_ptr(y), vx_ptr(vx), vy_ptr(vy), density_ptr(density), hash_ptr(hash) {}
+          x_ptr(x), y_ptr(y), vx_ptr(vx), vy_ptr(vy), density_ptr(density), hash_ptr(hash),
+          sorted_indices_ptr(sortedIndices) {}
     
     __device__ void operator()(int i) const {
+        const int ogIndex = sorted_indices_ptr[i];
         float force_x = 0.0;
         float force_y = 0.0;
 
-        float x1 = x_ptr[i];
-        float y1 = y_ptr[i];
+        float x1 = x_ptr[ogIndex];
+        float y1 = y_ptr[ogIndex];
 
         // Get current particle velocity
-        float vx1 = vx_ptr[i];
-        float vy1 = vy_ptr[i];
+        float vx1 = vx_ptr[ogIndex];
+        float vy1 = vy_ptr[ogIndex];
 
         float density1 = density_ptr[i];
         if (density1 <= 0.0) return;
@@ -265,10 +274,11 @@ struct CalcPressureFunctor
                 // Loop untill particle's hash != current cell
                 for (int j = start_idx; j < params.numParticles && hash_ptr[j] == neighbourCell; j++) {
                     if (i == j) continue;
+                    const int nextOgIndex = sorted_indices_ptr[j];
 
                     // get other particle postion
-                    float x2 = x_ptr[j];
-                    float y2 = y_ptr[j];
+                    float x2 = x_ptr[nextOgIndex];
+                    float y2 = y_ptr[nextOgIndex];
 
                     // Get distance/ magnitiude
                     float dist = distance_from_two_points(x1, y1, x2, y2);
@@ -281,7 +291,7 @@ struct CalcPressureFunctor
                     // Get the slope of the kernal at the distance
                     float slope = spikey_kernal_derivative(dist, params.smoothingRadius); // Grab the gradient of pressure change
                     // Get density and pressure for 2nd particle
-                    float density2 = particleArray[j].density;
+                    float density2 = density_ptr[nextOgIndex];
                     float pressure2 = density_to_pressure(density2, params);
 
                     float gradX = dirX * slope;
@@ -295,8 +305,8 @@ struct CalcPressureFunctor
                     // do viscosity things
                     float influence = viscosity_kernal(dist, params.smoothingRadius);
 
-                    float vx2 = vx_ptr[j];
-                    float vy2 = vy_ptr[j];
+                    float vx2 = vx_ptr[nextOgIndex];
+                    float vy2 = vy_ptr[nextOgIndex];
                     
                     float vx_diff = vx2 - vx1;
                     float vy_diff = vy2 - vy1;
@@ -306,8 +316,8 @@ struct CalcPressureFunctor
                 }
             }
         }
-        vx_ptr[i] += (force_x / density1) * params.timeStep;
-        vy_ptr[i] += (force_y / density1) * params.timeStep;
+        vx_ptr[ogIndex] += (force_x / density1) * params.timeStep;
+        vy_ptr[ogIndex] += (force_y / density1) * params.timeStep;
     }
 };
 
@@ -359,7 +369,8 @@ struct UpdateParticleFunctor
     const float* vx_ptr;
     const float* vy_ptr;
 
-    __host__ UpdateParticleFunctor(const SimulationParams& p, float* x, float* y, const float* vx, const float* vy)
+    __host__ UpdateParticleFunctor(const SimulationParams& p, float* x, float* y, const float* vx,
+        const float* vy)
         : params(p), x_ptr(x), y_ptr(y), vx_ptr(vx), vy_ptr(vy) {}
 
     __device__ void operator()(int i) const {
@@ -451,11 +462,14 @@ int main(int argc, char** argv)
     thrust::device_vector<float> d_density = h_density;
     thrust::device_vector<int> d_gridHash(numParticles);
     thrust::device_vector<int> d_cellStart(numCells);
+    thrust::device_vector<int> d_particleIndicies(numParticles);
+    thrust::sequence(d_particleIndicies.begin(), d_particleIndicies.end()); // Sets it to 0,1,2..
 
     for (int step = 0; step < maxNumSteps; step++) {
         // Time execution
         auto start = timer::now();
 
+        // Get pointers to all me VECTORS OHH YEAHHH
         float* d_x_ptr = thrust::raw_pointer_cast(d_x.data());
         float* d_y_ptr = thrust::raw_pointer_cast(d_y.data());
         float* d_vx_ptr = thrust::raw_pointer_cast(d_vx.data());
@@ -463,6 +477,7 @@ int main(int argc, char** argv)
         float* d_density_ptr = thrust::raw_pointer_cast(d_density.data());
         int* d_gridHash_ptr = thrust::raw_pointer_cast(d_gridHash.data());
         int* d_cellStart_ptr = thrust::raw_pointer_cast(d_cellStart.data());
+        int* d_particleIndicies_ptr = thrust::raw_pointer_cast(d_particleIndicies.data());
     
         // Apply half vy step as per leapfrog
         thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
@@ -473,9 +488,7 @@ int main(int argc, char** argv)
             UpdateParticleFunctor(params, d_x_ptr, d_y_ptr, d_vx_ptr, d_vy_ptr));
 
         // Build grid using thurt for each
-        thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
-            BuildGridHashFunctor(params, bounds, cellSize, gridRows, gridCols,
-                d_x_ptr, d_y_ptr, d_gridHash_ptr));
+        thrust::sort_by_key(d_gridHash.begin(), d_gridHash.end(), d_particle_indices.begin());
 
         // Sort using thrust :)
         thrust::sort_by_key(
@@ -494,12 +507,13 @@ int main(int argc, char** argv)
         // Parallel calculate denisty
         thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
             CalcDensityFunctor(params, bounds, cellSize, gridRows, gridCols,
-                d_cellStart_ptr, d_x_ptr, d_y_ptr, d_gridHash_ptr, d_density_ptr));
+                d_cellStart_ptr, d_x_ptr, d_y_ptr, d_gridHash_ptr, d_density_ptr, d_particleIndicies_ptr));
 
         // Parallel calculate pressure forces
         thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
             CalcPressureFunctor(params, bounds, cellSize, gridRows, gridCols,
-                d_cellStart_ptr, d_x_ptr, d_y_ptr, d_density_ptr, d_gridHash_ptr, d_vx_ptr, d_vy_ptr));
+                d_cellStart_ptr, d_x_ptr, d_y_ptr, d_density_ptr, d_gridHash_ptr, d_vx_ptr,
+                d_vy_ptr, d_particleIndicies_ptr));
 
         // Apply other half of leapfrog
         thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
