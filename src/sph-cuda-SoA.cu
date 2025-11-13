@@ -261,7 +261,10 @@ struct CalcPressureFunctor
                 int j = cellStart[neighbourCell];
 
                 while (j != -1) {
-                    if (i == j) continue;
+                    if (i == j) {
+                        j = particleNext[j];
+                        continue;
+                    }
 
                     // get other particle postion
                     float x2 = x_ptr[j];
