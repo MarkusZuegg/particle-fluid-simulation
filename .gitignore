@@ -2,6 +2,7 @@
 COSC3500_Milestone.pdf
 src/sph_cpu
 src/sph_gpu
+src/sph_gpu_SoA
 src/logs/
 src/gmon.out
 src/analysis.txt
