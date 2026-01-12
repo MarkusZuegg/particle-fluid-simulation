@@ -9,7 +9,7 @@ import sys
 CSV_FILE_PATH = 'data.csv'
 
 # Choose which methods to plot (leave empty to plot all)
-methods_to_plot = [ 'AoS grid', 'O-1', 'O-2']
+methods_to_plot = ['gpu_AOS', 'gpu_SOA']
 
 # Choose which x-values to exclude
 x_values_to_exclude = []
@@ -44,28 +44,24 @@ filtered_data['std_dev'] = filtered_data[run_columns].std(axis=1)
 # --- Plotting ---
 plt.style.use('seaborn-v0_8-whitegrid')
 fig, ax = plt.subplots(figsize=(12, 8))
-markers = {'SoA': 'o', 'SoA grid': 's', 'AoS grid': '^', 'O1': 'D', 'O2': 'X'}
+# --- CORRECTION: Changed key from 'SoA gpu_SOA' to 'gpu_SOA' ---
+markers = {'gpu_AOS': 'o', 'gpu_SOA': 's'}
 
 # Loop through each method to plot it
 for method_name, group in filtered_data.groupby('method'):
 
-    # === NEW: Robustness Check ===
-    # Check if there is any valid data to plot for this group before proceeding.
-    # .notna() finds non-empty values, .any() checks if there's at least one.
+    # === Robustness Check ===
     if group['mean'].notna().any():
         ax.errorbar(
             group['#particles'],
             group['mean'],
             yerr=group['std_dev'],
-            fmt='-' + markers.get(method_name, 'd'),
+            fmt='-' + markers.get(method_name, 'd'), # Use circle/square markers
             capsize=5,
             label=method_name
         )
     else:
-        # If no valid data, print a warning and skip this method.
         print(f"Warning: Skipping method '{method_name}' as it contains no valid data to plot.")
-    # ==============================
-
 
 # --- Final Plot Customization ---
 ax.set_xscale('log')
@@ -79,12 +75,11 @@ plt.setp(ax.get_xticklabels(), rotation=30, horizontalalignment='right')
 
 ax.grid(True, which='major', linestyle='-', linewidth='0.5', color='gray')
 ax.grid(True, which='minor', linestyle=':', linewidth='0.5', color='lightgray')
-ax.minorticks_on()
 
-ax.set_title('Performance Comparison of Particle Implementations', fontsize=16)
+ax.set_title('Performance Comparison: AoS vs. SoA', fontsize=16)
 ax.set_xlabel('# of Particles (log scale)', fontsize=12)
-ax.set_ylabel('Performance Metric / Time (log scale)', fontsize=12)
-ax.legend(fontsize=10)
+ax.set_ylabel('Average Time per Step (µs) (log scale)', fontsize=12)
+ax.legend(fontsize=12)
 
 plt.tight_layout()
 plt.show()

@@ -1,7 +1,6 @@
 // Created by Markus Zuegg
 // Main cpp script to run sph simulation
 // Main simulation loop will be housed here
-#include <bits/stdc++.h>
 #include <string>
 #include <random>
 #include <fstream>
@@ -10,6 +9,8 @@
 #include <algorithm>
 #include "cJSON.h"
 #include "gsd.h"
+
+#define _USE_MATH_DEFINES
 #include <math.h>
 
 #include <thrust/device_vector.h>
@@ -25,7 +26,6 @@ using mircoseconds = std::chrono::microseconds;
 
 // =================== Global Variables ========================================
 const int numDimensions = 2;
-#define ZORDER true
 
 // =========================== Structs =========================================
 // Bounding box for simulation
@@ -142,12 +142,7 @@ struct BuildGridHashFunctor
         if (cellX >= gridCols) cellX = gridCols - 1;
         if (cellY < 0) cellY = 0;
         if (cellY >= gridRows) cellY = gridRows - 1;
-
-        if (ZORDER) {
-            p.gridHash = interleave_bits(cellX, cellY);
-        } else {
-            p.gridHash = cellX + (cellY * gridCols);
-        }
+        p.gridHash = cellX + (cellY * gridCols);
     }
 };
 
@@ -483,6 +478,8 @@ int main(int argc, char** argv)
         const int numBlocks = (params.numParticles + threadsPerBlock - 1) / threadsPerBlock;
         find_cell_start_kernal<<<numBlocks, threadsPerBlock>>>(
             d_particleArray_ptr, d_cellStart_ptr, params.numParticles);
+
+        cudaDeviceSynchronize();
         
         // Parallel calculate denisty
         thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(numParticles),
