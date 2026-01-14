@@ -69,42 +69,40 @@ typedef struct
     int gridHash;
 } Particle;
 
-//! currently depreicated (maybe use later)
-// Ensum to hold all version that can be run
-enum Versions {
-    SoA = 0, //n^2 approach
-    SoA_LINKED = 1, // struct of arrays, with linkedlist grid
-    AoS_LINKED = 2, // array of structs, with linkedlist grid
-    AoS_SORTED = 3 // array of structs, with sorted grid
-};
-
 // ========================= Func Protos =======================================
 
 __global__ void find_cell_start_kernal(const Particle* particleArray, int* cellStart, int numParticles);
+
+__device__ inline float accumulate_density(const Particle& p1, const Particle& p2, const SimulationParams& params);
+__device__ inline void accumulate_pressure_viscosity(float& force_x, float& force_y, const Particle& p1,
+    const Particle& p2, float pressure1, const SimulationParams& params);
+
 __device__ inline float ploy6_kernal(float dist, float radius);
 __device__ inline float spikey_kernal(float dist, float radius);
 __device__ inline float spikey_kernal_derivative(float dist, float radius);
 __device__ inline float viscosity_kernal(float dist, float radius);
-__device__ float distance_from_two_points(float x1, float y1, float x2, float y2);
-__device__ float density_to_pressure(float density, const SimulationParams &params);
-__device__ inline unsigned int interleave_bits(unsigned int x, unsigned int y);
 
 // General
 int get_x_index(int i);
 int get_y_index(int i);
+__device__ float distance_from_two_points(float x1, float y1, float x2, float y2);
+__device__ float density_to_pressure(float density, const SimulationParams &params);
+__device__ inline unsigned int interleave_bits(unsigned int x, unsigned int y);
+__device__ inline int calc_hash(int x, int y, int cols);
+__device__ inline int clamp(int value, int min, int max);
 
 // Inits
 void init_random_particle_pos_AoS(vector<Particle> &particleArray,
-        const box &bounds, const SimulationParams &params);
+    const box &bounds, const SimulationParams &params);
 // Adjusted for thrust vector
 void init_grid_particle_pos_AoS(thrust::host_vector<Particle> &particleArray,
-        const box &bounds, const SimulationParams &params);
+    const box &bounds, const SimulationParams &params);
 
 // File saving
 void save_to_json(const std::string &filename, const SimulationParams &params, const box &bounds);
 void write_frame_to_gsd(gsd_handle &handle, uint32_t step, uint32_t numParticles,
-        const box &bounds, const vector<float> &positions, const vector<float> &velocities,
-        const SimulationParams &params);
+    const box &bounds, const vector<float> &positions, const vector<float> &velocities,
+    const SimulationParams &params);
 
 // ===================== Thrust Functors =======================
 
@@ -138,11 +136,9 @@ struct BuildGridHashFunctor
         int cellX = (int)floorf((p.x - bounds.xmin) / cellSize);
         int cellY = (int)floorf((p.y - bounds.ymin) / cellSize);
         // clamp with out using std::clamp
-        if (cellX < 0) cellX = 0;
-        if (cellX >= gridCols) cellX = gridCols - 1;
-        if (cellY < 0) cellY = 0;
-        if (cellY >= gridRows) cellY = gridRows - 1;
-        p.gridHash = cellX + (cellY * gridCols);
+        cellX = clamp(cellX, 0, gridCols - 1);
+        cellY = clamp(cellY, 0, gridRows - 1);
+        p.gridHash = calc_hash(cellX, cellY, gridCols);
     }
 };
 
@@ -184,10 +180,8 @@ struct CalcDensityFunctor
         int cellX = static_cast<int>(floorf((x1 - bounds.xmin) / cellSize));
         int cellY = static_cast<int>(floorf((y1 - bounds.ymin) / cellSize));
         // clamp with out using std::clamp
-        if (cellX < 0) cellX = 0;
-        if (cellX >= gridCols) cellX = gridCols - 1;
-        if (cellY < 0) cellY = 0;
-        if (cellY >= gridRows) cellY = gridRows - 1;
+        cellX = clamp(cellX, 0, gridCols - 1);
+        cellY = clamp(cellY, 0, gridRows - 1);
         
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
@@ -196,7 +190,7 @@ struct CalcDensityFunctor
                 if (newCellX < 0 || newCellX >= gridCols) continue;
                 if (newCellY < 0 || newCellY >= gridRows) continue;
 
-                int neighbourCell = newCellX + (newCellY * gridCols);
+                int neighbourCell = calc_hash(newCellX, newCellY, gridCols);
                 int start_idx = cellStart[neighbourCell];
 
                 // If cell is empty
@@ -204,11 +198,7 @@ struct CalcDensityFunctor
 
                 // Loop untill particle's hash != current cell
                 for (int j = start_idx; j < params.numParticles && particleArray[j].gridHash == neighbourCell; j++) {
-                    float x2 = particleArray[j].x;
-                    float y2 = particleArray[j].y;
-                    float dist = distance_from_two_points(x1, y1, x2, y2);
-                    float influence = ploy6_kernal(dist, params.smoothingRadius);
-                    density += params.mass * influence;
+                    density += accumulate_density(particleArray[i], particleArray[j], params);
                 }
             }
         }
@@ -242,13 +232,8 @@ struct CalcPressureFunctor
     __device__ void operator()(int i) const {
         float force_x = 0.0;
         float force_y = 0.0;
-
         float x1 = particleArray[i].x;
         float y1 = particleArray[i].y;
-
-        // Get current particle velocity
-        float vx1 = particleArray[i].vx;
-        float vy1 = particleArray[i].vy;
 
         float density1 = particleArray[i].density;
         if (density1 <= 0.0) return;
@@ -258,10 +243,8 @@ struct CalcPressureFunctor
         int cellX = (int)floorf((x1 - bounds.xmin) / cellSize);
         int cellY = (int)floorf((y1 - bounds.ymin) / cellSize);
         // clamp with out using std::clamp
-        if (cellX < 0) cellX = 0;
-        if (cellX >= gridCols) cellX = gridCols - 1;
-        if (cellY < 0) cellY = 0;
-        if (cellY >= gridRows) cellY = gridRows - 1;
+        cellX = clamp(cellX, 0, gridCols - 1);
+        cellY = clamp(cellY, 0, gridRows - 1);
 
         // loop through surounding cells
         for (int dy = -1; dy <= 1; dy++) {
@@ -271,7 +254,7 @@ struct CalcPressureFunctor
                 if (newCellX < 0 || newCellX >= gridCols) continue;
                 if (newCellY < 0 || newCellY >= gridRows) continue;
 
-                int neighbourCell = newCellX + (newCellY * gridCols);
+                int neighbourCell = calc_hash(newCellX, newCellY, gridCols);
                 int start_idx = cellStart[neighbourCell];
 
                 // If cell is empty
@@ -281,43 +264,7 @@ struct CalcPressureFunctor
                 for (int j = start_idx; j < params.numParticles && particleArray[j].gridHash == neighbourCell; j++) {
                     if (&particleArray[i] == &particleArray[j]) continue;
 
-                    // get other particle postion
-                    float x2 = particleArray[j].x;
-                    float y2 = particleArray[j].y;
-
-                    // Get distance/ magnitiude
-                    float dist = distance_from_two_points(x1, y1, x2, y2);
-                    if (dist == 0) continue; // Either particle is same, or ontop of eachother
-
-                    // Get unit vectors
-                    float dirX = (x1 - x2) / dist;
-                    float dirY = (y1 - y2) / dist;
-
-                    // Get the slope of the kernal at the distance
-                    float slope = spikey_kernal_derivative(dist, params.smoothingRadius); // Grab the gradient of pressure change
-                    // Get density and pressure for 2nd particle
-                    float density2 = particleArray[j].density;
-                    float pressure2 = density_to_pressure(density2, params);
-
-                    float gradX = dirX * slope;
-                    float gradY = dirY * slope;
-                    // Symetric pressure calculation
-                    float coeff = -params.mass * (pressure1 / (density1 * density1) + pressure2 / (density2 * density2));
-
-                    force_x += coeff * gradX;
-                    force_y += coeff * gradY;
-
-                    // do viscosity things
-                    float influence = viscosity_kernal(dist, params.smoothingRadius);
-
-                    float vx2 = particleArray[j].vx;
-                    float vy2 = particleArray[j].vy;
-                    
-                    float vx_diff = vx2 - vx1;
-                    float vy_diff = vy2 - vy1;
-
-                    force_x += params.viscosity * vx_diff * influence;
-                    force_y += params.viscosity * vy_diff * influence;
+                    accumulate_pressure_viscosity(force_x, force_y, particleArray[i], particleArray[j], pressure1, params);
                 }
             }
         }
@@ -384,8 +331,9 @@ int main(int argc, char** argv)
     mircoseconds totalTime{0};
 
     // ============= Simulation params ==================
-    const int maxNumSteps = 8000;
     const int saveFrames = 10; // How many frames to save. != 0
+
+    const int maxNumSteps = 8000;
     const int numParticles = 1225; // 35 grid
     const float timeStep = 0.001;
 
@@ -402,9 +350,6 @@ int main(int argc, char** argv)
     const float viscosity = 0.1;
 
     const box bounds = {12, 0, 10, 0, 0, 0}; //xmax, xmin, ymax, ymin, zmax, zmin
-
-    // Change the line below to switch between each version
-    int runType = AoS_SORTED;
 
     // Set up struct to hold params
     const SimulationParams params = {
@@ -428,7 +373,6 @@ int main(int argc, char** argv)
     vector<int> cellStart;
 
     // ========================== File Names ==============================
-    std::string fileNameCsv = "logs/x" + std::string(argv[0]) + ".csv";
     std::string fileNameJson = "logs/x" + std::string(argv[0]) + ".json";
     std::string fileNameGsd = "logs/x" + std::string(argv[0]) + ".gsd";
 
@@ -540,6 +484,59 @@ __global__ void find_cell_start_kernal(const Particle* particleArray, int* cellS
     }
 }
 
+// ====================== MATH ============================
+
+__device__ inline float accumulate_density(
+        const Particle& p1,
+        const Particle& p2,
+        const SimulationParams& params
+)
+{
+    float dist = distance_from_two_points(p1.x, p1.y, p2.x, p2.y);
+    float influence = ploy6_kernal(dist, params.smoothingRadius);
+    return params.mass * influence;
+}
+
+__device__ inline void accumulate_pressure_viscosity(
+        float& force_x,
+        float& force_y,
+        const Particle& p1,
+        const Particle& p2,
+        float pressure1,
+        const SimulationParams& params)
+{
+    // Get distance/ magnitiude
+    float dist = distance_from_two_points(p1.x, p1.y, p2.x, p2.y);
+    if (dist == 0) return; // Either particle is same, or ontop of eachother
+
+    // Get unit vectors
+    float dirX = (p1.x - p2.x) / dist;
+    float dirY = (p1.y - p2.y) / dist;
+
+    // Get the slope of the kernal at the distance
+    float slope = spikey_kernal_derivative(dist, params.smoothingRadius); // Grab the gradient of pressure change
+    // Get density and pressure for 2nd particle
+    float density2 = p2.density;
+    float pressure2 = density_to_pressure(density2, params);
+
+    float gradX = dirX * slope;
+    float gradY = dirY * slope;
+    // Symetric pressure calculation
+    float coeff = -params.mass * (pressure1 / (p1.density * p1.density) + pressure2 / (p2.density * p2.density));
+
+    force_x += coeff * gradX;
+    force_y += coeff * gradY;
+
+    // do viscosity things
+    float influence = viscosity_kernal(dist, params.smoothingRadius);
+    
+    float vx_diff = p2.vx - p1.vx;
+    float vy_diff = p2.vy - p1.vy;
+
+    force_x += params.viscosity * vx_diff * influence;
+    force_y += params.viscosity * vy_diff * influence;
+}
+
 // =================== Kernals ====================
 
 // (r^2-d^2)^3 kernal
@@ -626,6 +623,18 @@ __device__ inline unsigned int interleave_bits(unsigned int x, unsigned int y)
     y = (y | (y << 1)) & 0x55555555;
 
     return x | (y << 1);
+}
+
+__device__ inline int calc_hash(int x, int y, int cols)
+{
+    return x + (y * cols);
+}
+
+__device__ inline int clamp(int value, int min, int max)
+{
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
 }
 
 // ============= Particle INITS ==================
